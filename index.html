@@ -915,7 +915,7 @@
                         {/* Connection status indicator */}
                         {connectionStatus === 'disconnected' && (
                             <div className="absolute top-0 left-0 right-0 bg-red-400 text-white text-center text-xs font-bold py-1 z-[200]">
-                                ⚠ Koneksi terputus, mencoba sambung ulang...
+                                Koneksi terputus, mencoba sambung ulang...
                             </div>
                         )}
 
@@ -939,7 +939,7 @@
                             <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
                                 <h1 className="text-4xl font-black text-pink-500 mb-1 drop-shadow-sm text-center">POKÉMON<br/>CONNECT</h1>
                                 <h2 className="text-lg font-bold text-purple-400 mb-2">Halo, {playerName}!</h2>
-                                {(() => { const best = parseInt(localStorage.getItem('pkmnBestScore') || '0'); return best > 0 ? <p className="text-sm text-pink-300 font-bold mb-6">🏆 Best Score: {best}</p> : <div className="mb-6"></div>; })()}
+                                {(() => { const best = parseInt(localStorage.getItem('pkmnBestScore') || '0'); return best > 0 ? <p className="text-sm text-pink-300 font-bold mb-6">Best Score: {best}</p> : <div className="mb-6"></div>; })()}
                                 
                                 <div className="flex flex-col gap-4 w-3/4 max-w-[250px]">
                                     <button onClick={() => prepareLevel(1)} className="cute-btn-text py-3 text-lg font-bold">Main Sendiri</button>
@@ -1022,7 +1022,7 @@
                                             return (
                                                 <>
                                                     <div className={`text-5xl font-black mb-1 ${iWin ? 'text-green-400' : isDraw ? 'text-yellow-400' : 'text-red-400'}`}>
-                                                        {iWin ? '🏆 MENANG!' : isDraw ? '🤝 SERI!' : '💀 KALAH!'}
+                                                        {iWin ? 'MENANG!' : isDraw ? 'SERI!' : 'KALAH!'}
                                                     </div>
                                                     <p className="text-sm text-gray-400 font-bold mb-4">Waktu Habis!</p>
                                                     <div className="w-full max-w-[260px] bg-white border-2 border-pink-200 rounded-2xl p-4 mb-4 space-y-2">
@@ -1048,7 +1048,7 @@
                                             </>
                                         )}
                                         {connectionStatus === 'opponent_left' && (
-                                            <p className="text-xs text-orange-400 font-bold mt-3">⚠ Lawan telah keluar dari permainan</p>
+                                            <p className="text-xs text-orange-400 font-bold mt-3">Lawan telah keluar dari permainan</p>
                                         )}
                                     </>
                                 )}
