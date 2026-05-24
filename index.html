@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pokémon Connect Ultimate</title>
+    <title>Pokémon Connect Pro Multiplayer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@600;700;800&display=swap" rel="stylesheet">
@@ -167,11 +167,8 @@
         };
 
         const App = () => {
-            // Local Storage untuk Nama Pemain
             const [playerName, setPlayerName] = useState(() => localStorage.getItem('pkmnPlayerName') || '');
             const [opponentName, setOpponentName] = useState('');
-            
-            // State: LOGIN -> LOBBY_MAIN -> MATCHMAKING -> LOADING_BOARD -> WAITING_HOST_START -> PLAYING -> WON/GAMEOVER/PAUSED
             const [gameState, setGameState] = useState(playerName ? 'LOBBY_MAIN' : 'LOGIN'); 
             
             const [board, setBoard] = useState([]);
@@ -193,15 +190,17 @@
             const [opponentScore, setOpponentScore] = useState(0);
             const [multiplayerReady, setMultiplayerReady] = useState({ host: false, guest: false });
 
+            // Statistik Performa (CO-OP)
+            const [coopSummary, setCoopSummary] = useState({ myConnects: 0, allyConnects: 0, myTotalTime: 0, allyTotalTime: 0 });
+            const statsRef = useRef({ myConnects: 0, allyConnects: 0, myTotalTime: 0, allyTotalTime: 0, lastActionTime: 0 });
+
             const isAnimating = useRef(false);
             const channelRef = useRef(null);
             const matchmakingChannelRef = useRef(null);
-            const clientId = useRef(Math.random().toString(36).substr(2, 6)); 
             const boardRef = useRef(board); 
             
             useEffect(() => { boardRef.current = board; }, [board]);
 
-            // Cek Kesiapan Multiplayer
             useEffect(() => {
                 if (isHost && multiMode !== 'SINGLE' && gameState === 'LOADING_BOARD') {
                     if (multiplayerReady.host && multiplayerReady.guest) {
@@ -250,7 +249,7 @@
             // --- SISTEM PRE-LOAD GAMBAR (ANTI-KOSONG) ---
             const preloadBoardImages = async (boardData) => {
                 setGameState('LOADING_BOARD');
-                setProgress(0); // Pinjam state progress untuk progress bar loading
+                setProgress(0); 
 
                 const uniqueIds = new Set();
                 for(let r = 1; r <= ROWS; r++) {
@@ -271,13 +270,13 @@
                             resolve();
                         };
                         img.onerror = () => {
-                            loadedCount++; // Anggap selesai agar tidak macet
+                            loadedCount++; 
                             resolve();
                         };
                     });
                 });
 
-                // Timeout maksimal 8 detik, jika koneksi ngelag, paksakan masuk game
+                // Timeout maksimal 8 detik
                 const timeoutPromise = new Promise(resolve => setTimeout(resolve, 8000));
                 await Promise.race([Promise.all(loadPromises), timeoutPromise]);
             };
@@ -290,16 +289,13 @@
                     setScore(0); setHp(3); setHints(3); setShuffles(3); setOpponentScore(0);
                 }
                 
-                // 1. Mulai Pre-load gambar
                 await preloadBoardImages(b);
 
-                // 2. Logika Sinkronisasi setelah selesai load
                 if (multiMode === 'SINGLE') {
                     finalizeStart();
                 } else {
                     if (isHost) {
                         setMultiplayerReady(prev => ({...prev, host: true}));
-                        // Menunggu useEffect memeriksa apakah guest juga ready
                     } else {
                         channelRef.current?.publish('action', { type: 'GUEST_READY' });
                         setGameState('WAITING_HOST_START');
@@ -315,6 +311,9 @@
                 setActivePath(null);
                 setHintActiveTiles([]);
                 isAnimating.current = false;
+                
+                // Reset statistik untuk level ini
+                statsRef.current = { myConnects: 0, allyConnects: 0, myTotalTime: 0, allyTotalTime: 0, lastActionTime: Date.now() };
             };
 
             // AUTO MATCHMAKING LOBBY
@@ -327,7 +326,6 @@
 
                 lobbyChannel.presence.get((err, members) => {
                     if (err || members.length === 0) {
-                        // Tidak ada yang antri, kita jadi Host
                         setIsHost(true);
                         const newRoomId = Math.random().toString(36).substr(2, 8);
                         
@@ -337,7 +335,6 @@
 
                         lobbyChannel.presence.enter({ roomId: newRoomId, hostName: playerName });
                     } else {
-                        // Ada Host! Kita gabung
                         setIsHost(false);
                         const targetHost = members[0]; 
                         const targetRoom = targetHost.data.roomId;
@@ -363,13 +360,13 @@
                         
                         const newB = generateBoard();
                         ch.publish('action', { type: 'START_GAME_SYNC', board: newB, mode: mode, hostName: playerName });
-                        prepareLevel(1, newB); // Host mulai loading level
+                        prepareLevel(1, newB); 
                     }
                     
                     if (data.type === 'START_GAME_SYNC' && !amIHost) {
                         setMultiMode(data.mode);
                         setOpponentName(data.hostName);
-                        prepareLevel(1, data.board); // Guest terima board & mulai loading
+                        prepareLevel(1, data.board); 
                     }
 
                     if (data.type === 'GUEST_READY' && amIHost) {
@@ -377,7 +374,7 @@
                     }
 
                     if (data.type === 'START_PLAYING' && !amIHost) {
-                        finalizeStart(); // Host bilang GO, Guest masuk mode PLAYING
+                        finalizeStart(); 
                     }
 
                     if (data.type === 'VS_SCORE') setOpponentScore(data.score);
@@ -397,7 +394,6 @@
                 setGameState('LOBBY_MAIN');
             };
 
-            // SISTEM WAKTU DINAMIS
             useEffect(() => {
                 if (gameState !== 'PLAYING') return;
                 const speed = 0.10 + (level * 0.05); 
@@ -410,6 +406,27 @@
                 return () => clearInterval(timer);
             }, [gameState, level]);
 
+            const triggerLevelEndStats = (isGameOver = false) => {
+                setCoopSummary({
+                    myConnects: statsRef.current.myConnects,
+                    allyConnects: statsRef.current.allyConnects,
+                    myTotalTime: statsRef.current.myTotalTime,
+                    allyTotalTime: statsRef.current.allyTotalTime,
+                });
+                setGameState(isGameOver ? 'GAMEOVER' : 'WON');
+
+                // Jika Single Player atau Versus, lewat otomatis setelah 2.5 detik
+                if (!isGameOver && multiMode !== 'COOP') {
+                    setTimeout(() => {
+                        const newB = generateBoard();
+                        if (isHost && multiMode !== 'SINGLE') {
+                            channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: level + 1 });
+                        }
+                        prepareLevel(level + 1, newB);
+                    }, 2500);
+                }
+            };
+
             const handleTimeout = () => {
                 if (hp > 1) {
                     setHp(h => h - 1);
@@ -421,7 +438,7 @@
                     }
                     prepareLevel(level, newB); 
                 } else {
-                    setGameState('GAMEOVER');
+                    triggerLevelEndStats(true);
                 }
             };
 
@@ -471,15 +488,7 @@
                     for (let c = 1; c <= COLS; c++) { if (b[r][c] !== 0) empty = false; }
                 }
                 if (empty) {
-                    setGameState('WON');
-                    setTimeout(() => {
-                        if (multiMode === 'COOP' && !isHost) return; 
-                        const newB = generateBoard();
-                        if (isHost && multiMode !== 'SINGLE') {
-                            channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: level + 1 });
-                        }
-                        prepareLevel(level + 1, newB);
-                    }, 2000);
+                    triggerLevelEndStats(false);
                     return true;
                 }
                 if (!findHint(b)) {
@@ -500,6 +509,12 @@
                 if (b[r1][c1] === 0 || b[r2][c2] === 0) { isAnimating.current = false; return; }
 
                 setMatchedTiles([ {r: r1, c: c1, id: b[r1][c1]}, {r: r2, c: c2, id: b[r2][c2]} ]);
+
+                // Catat statistik remote
+                const now = Date.now();
+                statsRef.current.allyTotalTime += (now - statsRef.current.lastActionTime);
+                statsRef.current.allyConnects += 1;
+                statsRef.current.lastActionTime = now;
 
                 setTimeout(() => {
                     setBoard(prev => {
@@ -531,6 +546,12 @@
                     const id1 = board[r1][c1]; const id2 = board[r][c];
                     setMatchedTiles([ {r: r1, c: c1, id: id1}, {r, c, id: id2} ]);
 
+                    // Catat statistik lokal
+                    const now = Date.now();
+                    statsRef.current.myTotalTime += (now - statsRef.current.lastActionTime);
+                    statsRef.current.myConnects += 1;
+                    statsRef.current.lastActionTime = now;
+
                     if (multiMode === 'COOP') channelRef.current?.publish('action', { type: 'COOP_MATCH', r1, c1, r2: r, c2: c, path });
                     if (multiMode === 'VERSUS') channelRef.current?.publish('action', { type: 'VS_SCORE', score: score + 10 });
 
@@ -550,6 +571,77 @@
                 }
             };
 
+            // Helpers untuk Layar Laporan (Report Card)
+            const getAvgTime = () => {
+                const total = coopSummary.myConnects + coopSummary.allyConnects;
+                if(total === 0) return "0.0";
+                return ((coopSummary.myTotalTime + coopSummary.allyTotalTime) / total / 1000).toFixed(1);
+            };
+
+            const getMVP = () => {
+                if(coopSummary.myConnects > coopSummary.allyConnects) return playerName;
+                if(coopSummary.allyConnects > coopSummary.myConnects) return opponentName;
+                return "Seimbang";
+            };
+
+            const getRating = () => {
+                const avg = parseFloat(getAvgTime());
+                if (avg === 0) return { grade: '-', color: 'text-gray-400' };
+                if (avg <= 2.5) return { grade: 'SSS', color: 'text-yellow-400 drop-shadow-[0_0_12px_rgba(250,204,21,0.8)]' };
+                if (avg <= 4.0) return { grade: 'S', color: 'text-yellow-400 drop-shadow-md' };
+                if (avg <= 5.5) return { grade: 'A', color: 'text-red-400' };
+                if (avg <= 7.0) return { grade: 'B', color: 'text-purple-400' };
+                if (avg <= 9.0) return { grade: 'C', color: 'text-blue-400' };
+                return { grade: 'D', color: 'text-gray-500' };
+            };
+
+            const renderCoopStatsCard = (isGameOver = false) => (
+                <div className="bg-white border-4 border-pink-300 rounded-3xl p-6 shadow-2xl flex flex-col items-center w-full max-w-[340px]">
+                    <h2 className={`text-3xl font-black mb-1 ${isGameOver ? 'text-red-500' : 'text-pink-500'}`}>
+                        {isGameOver ? 'WAKTU HABIS!' : `LEVEL ${level} CLEAR!`}
+                    </h2>
+                    <p className="text-sm text-gray-400 font-bold mb-4 tracking-widest uppercase">Laporan Co-op</p>
+                    
+                    <div className={`text-7xl font-black mb-6 ${getRating().color}`}>
+                        {getRating().grade}
+                    </div>
+                    
+                    <div className="w-full space-y-2 mb-6">
+                        <div className="flex justify-between bg-pink-50/80 p-2.5 rounded-xl font-bold text-sm">
+                            <span className="text-gray-500">Pemain MVP</span>
+                            <span className="text-purple-600">{getMVP()}</span>
+                        </div>
+                        <div className="flex justify-between bg-pink-50/80 p-2.5 rounded-xl font-bold text-sm">
+                            <span className="text-gray-500">Rata-rata Waktu</span>
+                            <span className="text-blue-500">{getAvgTime()} Detik</span>
+                        </div>
+                        <div className="flex justify-between bg-pink-50/80 p-2.5 rounded-xl font-bold text-sm">
+                            <span className="text-gray-500">{playerName} (Kamu)</span>
+                            <span className="text-teal-500">{coopSummary.myConnects} Pasang</span>
+                        </div>
+                        <div className="flex justify-between bg-pink-50/80 p-2.5 rounded-xl font-bold text-sm">
+                            <span className="text-gray-500">{opponentName} (Partner)</span>
+                            <span className="text-red-400">{coopSummary.allyConnects} Pasang</span>
+                        </div>
+                    </div>
+                    
+                    {isGameOver ? (
+                        <button onClick={() => { channelRef.current?.unsubscribe(); setGameState('LOBBY_MAIN'); }} className="cute-btn-text w-full py-3 text-lg font-bold bg-gradient-to-r from-red-400 to-pink-500">Keluar ke Menu</button>
+                    ) : isHost ? (
+                        <button onClick={() => {
+                            const newB = generateBoard();
+                            channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: level + 1 });
+                            prepareLevel(level + 1, newB);
+                        }} className="cute-btn-text w-full py-3 text-lg font-bold bg-gradient-to-r from-teal-400 to-emerald-400">Lanjut Level {level + 1}</button>
+                    ) : (
+                        <div className="flex flex-col items-center">
+                            <div className="animate-spin rounded-full h-8 w-8 border-t-4 border-b-4 border-pink-400 mb-2"></div>
+                            <p className="text-sm text-gray-500 font-bold">Menunggu Host Lanjut...</p>
+                        </div>
+                    )}
+                </div>
+            );
+
             return (
                 <div className="w-full h-[100dvh] bg-pink-100 flex items-center justify-center p-1 sm:p-2">
                     <div className="w-full max-w-[480px] h-full flex flex-col bg-white border-[3px] border-pink-300 rounded-xl shadow-lg overflow-hidden relative">
@@ -559,7 +651,7 @@
                             {multiMode !== 'SINGLE' && (
                                 <div className="w-full bg-white/80 rounded-full px-3 py-1 flex justify-between items-center text-xs font-bold shadow-sm border border-pink-100 mb-1">
                                     <span className="text-purple-600 truncate max-w-[50%]">
-                                        {multiMode === 'COOP' ? `Bersama: ${opponentName}` : `${playerName} vs ${opponentName}`}
+                                        {multiMode === 'COOP' ? `Partner: ${opponentName}` : `${playerName} vs ${opponentName}`}
                                     </span>
                                     {multiMode === 'VERSUS' && (
                                         <span className="text-red-500 bg-red-50 px-2 py-0.5 rounded-full border border-red-100">Lawan: {opponentScore}</span>
@@ -584,9 +676,7 @@
                                 <div className="flex gap-1.5 sm:gap-2">
                                     <button onClick={handleHintClick} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center relative shadow-sm"><IconSearch /><span className="absolute -top-1 -right-1 bg-pink-500 text-white text-[9px] sm:text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{hints}</span></button>
                                     <button onClick={handleShuffleClick} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center relative shadow-sm"><IconRefresh /><span className="absolute -top-1 -right-1 bg-purple-500 text-white text-[9px] sm:text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{shuffles}</span></button>
-                                    <button onClick={() => setGameState('PAUSED')} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center text-pink-500 shadow-sm">
-                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5"><path fillRule="evenodd" d="M6.75 5.25a.75.75 0 01.75-.75H9a.75.75 0 01.75.75v13.5a.75.75 0 01-.75.75H7.5a.75.75 0 01-.75-.75V5.25zm7.5 0A.75.75 0 0115 4.5h1.5a.75.75 0 01.75.75v13.5a.75.75 0 01-.75.75H15a.75.75 0 01-.75-.75V5.25z" clipRule="evenodd" /></svg>
-                                    </button>
+                                    <button onClick={() => setGameState('PAUSED')} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center text-pink-500 shadow-sm"><IconPause /></button>
                                 </div>
                             </div>
                         </div>
@@ -636,12 +726,12 @@
                         {/* ===================== OVERLAYS ===================== */}
                         
                         {gameState === 'LOGIN' && (
-                            <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
+                            <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
                                 <h1 className="text-4xl font-black text-pink-500 mb-2 drop-shadow-sm text-center">POKÉMON<br/>CONNECT</h1>
                                 <p className="text-gray-500 font-bold mb-6">Siapa namamu?</p>
                                 <input 
                                     type="text" placeholder="Masukkan Nama" maxLength={12}
-                                    className="border-4 border-pink-200 rounded-xl px-4 py-3 text-center text-xl font-bold text-gray-700 w-3/4 max-w-[250px] mb-6 focus:outline-none focus:border-pink-400"
+                                    className="border-4 border-pink-200 rounded-xl px-4 py-3 text-center text-xl font-bold text-gray-700 w-3/4 max-w-[250px] mb-6 focus:outline-none focus:border-pink-400 transition-colors"
                                     value={playerName} onChange={e => setPlayerName(e.target.value)}
                                     onKeyDown={e => e.key === 'Enter' && handleLogin()}
                                 />
@@ -650,7 +740,7 @@
                         )}
 
                         {gameState === 'LOBBY_MAIN' && (
-                            <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
+                            <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
                                 <h1 className="text-4xl font-black text-pink-500 mb-1 drop-shadow-sm text-center">POKÉMON<br/>CONNECT</h1>
                                 <h2 className="text-lg font-bold text-purple-400 mb-8">Halo, {playerName}!</h2>
                                 
@@ -664,10 +754,10 @@
                         )}
 
                         {gameState === 'MATCHMAKING' && (
-                            <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
+                            <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
                                 <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-purple-400 mb-6"></div>
                                 <h2 className="text-2xl font-black text-purple-500 mb-2">Mencari Pemain...</h2>
-                                <p className="text-gray-500 font-bold text-center px-6">Sistem sedang mencarikan lawan atau teman main secara otomatis.</p>
+                                <p className="text-gray-500 font-bold text-center px-6">Sistem sedang mencarikan partner atau lawan otomatis.</p>
                                 <button onClick={cancelMatchmaking} className="text-gray-400 font-bold underline mt-8">Batal</button>
                             </div>
                         )}
@@ -689,7 +779,7 @@
                         )}
 
                         {gameState === 'WAITING_HOST_START' && (
-                            <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
+                            <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
                                 <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-teal-400 mb-6"></div>
                                 <h2 className="text-2xl font-black text-teal-500 mb-2">Menunggu Pemain...</h2>
                                 <p className="text-gray-500 font-bold text-center px-6">Sinkronisasi gambar selesai, menunggu pemain lain siap.</p>
@@ -704,21 +794,29 @@
                             </div>
                         )}
 
+                        {/* WON & GAMEOVER (CO-OP REPORT CARD VS STANDARD) */}
                         {gameState === 'GAMEOVER' && (
-                            <div className="absolute inset-0 bg-pink-50/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
-                                <h2 className="text-3xl font-black text-red-400 mb-2">WAKTU HABIS!</h2>
-                                <p className="text-lg text-gray-500 font-bold mb-1">Skormu: <span className="text-pink-500 text-3xl">{score}</span></p>
-                                {multiMode === 'VERSUS' && <p className="text-lg text-gray-500 font-bold mb-6">Skor {opponentName}: <span className="text-red-400 text-3xl">{opponentScore}</span></p>}
-                                <button onClick={() => { channelRef.current?.unsubscribe(); setGameState('LOBBY_MAIN'); }} className="cute-btn-text bg-gradient-to-r from-red-400 to-pink-500 px-8 py-3 text-lg font-bold mt-6">Kembali ke Menu</button>
+                            <div className="absolute inset-0 bg-pink-50/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100] p-4">
+                                {multiMode === 'COOP' ? renderCoopStatsCard(true) : (
+                                    <>
+                                        <h2 className="text-3xl font-black text-red-400 mb-2">WAKTU HABIS!</h2>
+                                        <p className="text-lg text-gray-500 font-bold mb-1">Skormu: <span className="text-pink-500 text-3xl">{score}</span></p>
+                                        {multiMode === 'VERSUS' && <p className="text-lg text-gray-500 font-bold mb-6">Skor {opponentName}: <span className="text-red-400 text-3xl">{opponentScore}</span></p>}
+                                        <button onClick={() => { channelRef.current?.unsubscribe(); setGameState('LOBBY_MAIN'); }} className="cute-btn-text bg-gradient-to-r from-red-400 to-pink-500 px-8 py-3 text-lg font-bold mt-6">Kembali ke Menu</button>
+                                    </>
+                                )}
                             </div>
                         )}
 
                         {gameState === 'WON' && (
-                            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
-                                <h2 className="text-3xl font-black text-green-400 mb-2">LEVEL {level} SELESAI!</h2>
-                                <p className="text-lg text-gray-500 mb-4 font-bold">Lanjut level {level + 1}...</p>
-                                {multiMode === 'COOP' && !isHost && <p className="text-sm text-pink-400 font-bold">Menunggu Host...</p>}
-                                <div className="animate-spin rounded-full h-10 w-10 border-t-4 border-b-4 border-pink-400 mt-4"></div>
+                            <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100] p-4">
+                                {multiMode === 'COOP' ? renderCoopStatsCard(false) : (
+                                    <>
+                                        <h2 className="text-3xl font-black text-green-400 mb-2">LEVEL {level} SELESAI!</h2>
+                                        <p className="text-lg text-gray-500 mb-4 font-bold">Lanjut level {level + 1}...</p>
+                                        <div className="animate-spin rounded-full h-10 w-10 border-t-4 border-b-4 border-pink-400 mt-4"></div>
+                                    </>
+                                )}
                             </div>
                         )}
                         
@@ -732,4 +830,5 @@
     </script>
 </body>
 </html>
+
 
