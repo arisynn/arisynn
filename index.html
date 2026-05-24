@@ -41,8 +41,8 @@
         }
 
         .cute-tile {
-            background-color: white; border: 1.5px solid #fbcfe8;
-            border-radius: 6px; width: 100%; height: 100%;
+            background-color: white; border: 1px solid #fbcfe8;
+            border-radius: 5px; width: 100%; height: 100%;
             display: flex; align-items: center; justify-content: center;
             transition: transform 0.15s ease-out, border-color 0.15s ease-out;
             position: relative;
@@ -94,6 +94,52 @@
             100% { transform: translateX(0); border-color: #fbcfe8; }
         }
         .cute-tile.wrong { animation: wrongShake 0.35s ease-out forwards; border-color: #ef4444; background-color: #fff1f2; }
+
+        /* Timer flash text */
+        @keyframes floatUp {
+            0%   { opacity: 1; transform: translateY(0) scale(1); }
+            100% { opacity: 0; transform: translateY(-30px) scale(0.8); }
+        }
+        .float-text { animation: floatUp 1s ease-out forwards; pointer-events: none; }
+
+        /* Timeout flash overlay */
+        @keyframes flashRed {
+            0%   { opacity: 0; }
+            20%  { opacity: 1; }
+            80%  { opacity: 1; }
+            100% { opacity: 0; }
+        }
+        .timeout-flash { animation: flashRed 1s ease-out forwards; }
+
+        /* Board clear flash */
+        @keyframes flashWhite {
+            0%   { opacity: 0; }
+            30%  { opacity: 1; }
+            100% { opacity: 0; }
+        }
+        .board-clear-flash { animation: flashWhite 0.5s ease-out forwards; }
+
+        /* Stats tile stagger */
+        @keyframes slideInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        /* New record animation */
+        @keyframes recordPop {
+            0%   { transform: scale(0.5) rotate(-10deg); opacity: 0; }
+            60%  { transform: scale(1.15) rotate(3deg); opacity: 1; }
+            100% { transform: scale(1) rotate(0deg); opacity: 1; }
+        }
+        .record-pop { animation: recordPop 0.5s ease-out forwards; }
+
+        /* Mute button */
+        .mute-btn {
+            background: white; border: 2px solid #fbcfe8; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            transition: all 0.1s;
+        }
+        .mute-btn:active { transform: scale(0.9); }
     </style>
 </head>
 <body>
@@ -119,10 +165,78 @@
             825, 827, 829, 846, 850, 854, 856, 872, 874, 877, 888, 906, 909, 912, 915, 917, 921, 925, 938, 946
         ];
 
+        // ===================== WEB AUDIO ENGINE =====================
+        const AudioEngine = (() => {
+            let ctx = null;
+            let muted = false;
+
+            const getCtx = () => {
+                if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+                return ctx;
+            };
+
+            const play = (freqs, dur, type = 'sine', vol = 0.3, delay = 0) => {
+                if (muted) return;
+                try {
+                    const ac = getCtx();
+                    freqs.forEach(({ f, t, d }, i) => {
+                        const osc = ac.createOscillator();
+                        const gain = ac.createGain();
+                        osc.connect(gain); gain.connect(ac.destination);
+                        osc.type = type;
+                        osc.frequency.setValueAtTime(f, ac.currentTime + delay + t);
+                        gain.gain.setValueAtTime(vol, ac.currentTime + delay + t);
+                        gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + delay + t + d);
+                        osc.start(ac.currentTime + delay + t);
+                        osc.stop(ac.currentTime + delay + t + d + 0.05);
+                    });
+                } catch(e) {}
+            };
+
+            return {
+                setMuted: (m) => { muted = m; },
+                isMuted: () => muted,
+                match: () => play([
+                    { f: 523, t: 0, d: 0.1 },
+                    { f: 659, t: 0.08, d: 0.1 },
+                    { f: 784, t: 0.16, d: 0.2 }
+                ], 0.4, 'triangle', 0.25),
+                wrong: () => play([{ f: 180, t: 0, d: 0.1 }], 0.1, 'sawtooth', 0.15),
+                hint: () => play([{ f: 880, t: 0, d: 0.2 }], 0.2, 'sine', 0.2),
+                shuffle: () => {
+                    const notes = [400, 500, 350, 600, 450];
+                    play(notes.map((f, i) => ({ f, t: i * 0.05, d: 0.1 })), 0.3, 'sine', 0.2);
+                },
+                tick: (n) => {
+                    const f = n === 'GO!' ? 880 : (n === 1 ? 660 : n === 2 ? 587 : 523);
+                    play([{ f, t: 0, d: n === 'GO!' ? 0.3 : 0.15 }], 0.15, 'triangle', 0.3);
+                },
+                levelClear: () => play([
+                    { f: 523, t: 0, d: 0.1 },
+                    { f: 659, t: 0.1, d: 0.1 },
+                    { f: 784, t: 0.2, d: 0.1 },
+                    { f: 1047, t: 0.3, d: 0.3 }
+                ], 0.5, 'triangle', 0.25),
+                gameOver: () => play([
+                    { f: 440, t: 0, d: 0.15 },
+                    { f: 370, t: 0.15, d: 0.15 },
+                    { f: 294, t: 0.3, d: 0.3 }
+                ], 0.5, 'sawtooth', 0.2),
+                timeout: () => play([
+                    { f: 300, t: 0, d: 0.2 },
+                    { f: 220, t: 0.2, d: 0.3 }
+                ], 0.5, 'sawtooth', 0.2),
+            };
+        })();
+
+        // ===================== SVG ICONS =====================
         const IconHeart = () => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#fb7185" className="w-5 h-5"><path d="M11.645 20.91l-.007-.003-.022-.012a15.247 15.247 0 01-.383-.218 25.18 25.18 0 01-4.244-3.17C4.688 15.36 2.25 12.174 2.25 8.25 2.25 5.322 4.714 3 7.688 3A5.5 5.5 0 0112 5.052 5.5 5.5 0 0116.313 3c2.973 0 5.437 2.322 5.437 5.25 0 3.925-2.438 7.111-4.739 9.256a25.175 25.175 0 01-4.244 3.17 15.247 15.247 0 01-.383.219l-.022.012-.007.004-.003.001a.752.752 0 01-.704 0l-.003-.001z" /></svg>;
         const IconSearch = () => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" /></svg>;
         const IconRefresh = () => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>;
         const IconPause = () => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6"><path fillRule="evenodd" d="M6.75 5.25a.75.75 0 01.75-.75H9a.75.75 0 01.75.75v13.5a.75.75 0 01-.75.75H7.5a.75.75 0 01-.75-.75V5.25zm7.5 0A.75.75 0 0115 4.5h1.5a.75.75 0 01.75.75v13.5a.75.75 0 01-.75.75H15a.75.75 0 01-.75-.75V5.25z" clipRule="evenodd" /></svg>;
+        const IconMute = ({ muted }) => muted
+            ? <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M17.25 9.75L19.5 12m0 0l2.25 2.25M19.5 12l2.25-2.25M19.5 12l-2.25 2.25m-10.5-6l4.72-4.72a.75.75 0 011.28.531V19.94a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.506-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.395C2.806 8.757 3.63 8.25 4.51 8.25H6.75z" /></svg>
+            : <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.395C2.806 8.757 3.63 8.25 4.51 8.25H6.75z" /></svg>;
 
         // --- ALGORITMA PATHFINDING ---
         const isPathClear = (board, r1, c1, r2, c2) => {
@@ -183,8 +297,24 @@
             return null;
         };
 
+        // ===================== TIMER CALC =====================
+        // Speed: 0.05 + (level * 0.02) per 200ms tick
+        // Level 1: 0.07/200ms = 0.35/s → 100/0.35 ≈ 286s (4.7 menit) — nah ini terlalu banyak
+        // Adjusted: 0.08 + (level * 0.025) per 200ms
+        // Level 1: 0.105/200ms → 100/0.525 ≈ 190s
+        // Level 5: 0.205/200ms → 100/1.025 ≈ 97s
+        // Level 10: 0.33/200ms → 100/1.65 ≈ 61s — lebih balanced
+        const getTimerSpeed = (level) => 0.08 + (level * 0.025);
+
+        const getSecondsLeft = (progress, level) => {
+            const speed = getTimerSpeed(level);
+            const ticksLeft = progress / speed;
+            return Math.ceil(ticksLeft * 0.2);
+        };
+
         const App = () => {
             const [playerName, setPlayerName] = useState(() => localStorage.getItem('pkmnPlayerName') || '');
+            const [loginError, setLoginError] = useState('');
             const [opponentName, setOpponentName] = useState('');
             const [gameState, setGameState] = useState(playerName ? 'LOBBY_MAIN' : 'LOGIN'); 
             
@@ -200,32 +330,48 @@
             const [matchedTiles, setMatchedTiles] = useState([]); 
             const [hintActiveTiles, setHintActiveTiles] = useState([]); 
             const [activePath, setActivePath] = useState(null); 
-            const [wrongTile, setWrongTile] = useState(null); // {r, c} tile yang salah klik
-            const [connectionStatus, setConnectionStatus] = useState('connected'); // 'connected' | 'disconnected'
+            const [wrongTile, setWrongTile] = useState(null);
+            const [connectionStatus, setConnectionStatus] = useState('connected');
+
+            // UI feedback states
+            const [showTimerAdd, setShowTimerAdd] = useState(false);
+            const [showTimeoutFlash, setShowTimeoutFlash] = useState(false);
+            const [showBoardClear, setShowBoardClear] = useState(false);
+            const [isMuted, setIsMuted] = useState(() => localStorage.getItem('pkmnMuted') === 'true');
+            const [isNewRecord, setIsNewRecord] = useState(false);
+
+            // Deadlock auto-detect interval
+            const deadlockCheckRef = useRef(null);
 
             // Multiplayer States
             const [multiMode, setMultiMode] = useState('SINGLE'); 
             const [isHost, setIsHost] = useState(true);
             const [opponentScore, setOpponentScore] = useState(0);
-            // Statistik Performa (CO-OP)
             const [coopSummary, setCoopSummary] = useState({ myConnects: 0, allyConnects: 0, myTotalTime: 0, allyTotalTime: 0 });
             const statsRef = useRef({ myConnects: 0, allyConnects: 0, myTotalTime: 0, allyTotalTime: 0, lastActionTime: 0 });
 
-            // Countdown state
-            const [countdown, setCountdown] = useState(null); // null | 3 | 2 | 1 | 'GO!'
+            const [countdown, setCountdown] = useState(null);
 
             const isAnimating = useRef(false);
             const channelRef = useRef(null);
             const matchmakingChannelRef = useRef(null);
             const boardRef = useRef(board);
-            const pendingMatchRef = useRef(false); // COOP: lock agar tidak double-match bersamaan
-            // Timestamp-based sync: host kirim waktu mulai absolut, kedua device hitung sendiri
+            const pendingMatchRef = useRef(false);
             const startAtRef = useRef(null);
-            // Tracking loading multiplayer
             const hostLoadedCountRef = useRef(0);
             const hostSelfLoadedRef = useRef(false);
+            const progressRef = useRef(100);
+            const levelRef = useRef(1);
             
             useEffect(() => { boardRef.current = board; }, [board]);
+            useEffect(() => { progressRef.current = progress; }, [progress]);
+            useEffect(() => { levelRef.current = level; }, [level]);
+
+            // Mute toggle
+            useEffect(() => {
+                AudioEngine.setMuted(isMuted);
+                localStorage.setItem('pkmnMuted', isMuted);
+            }, [isMuted]);
 
             // Monitor koneksi Ably
             useEffect(() => {
@@ -236,12 +382,33 @@
                 return () => ably.connection.off();
             }, []);
 
+            // Deadlock auto-detection every 3 seconds
+            useEffect(() => {
+                if (deadlockCheckRef.current) clearInterval(deadlockCheckRef.current);
+                if (gameState !== 'PLAYING') return;
+                deadlockCheckRef.current = setInterval(() => {
+                    const b = boardRef.current;
+                    if (!b || b.length === 0) return;
+                    if (!findHint(b)) {
+                        // Deadlock! Auto-shuffle
+                        if (multiMode === 'COOP' && !isHost) return;
+                        const newB = guaranteedShuffle(b);
+                        setBoard(newB);
+                        if (multiMode === 'COOP' && isHost) {
+                            channelRef.current?.publish('action', { type: 'SYNC_SHUFFLE', board: newB });
+                        }
+                    }
+                }, 3000);
+                return () => clearInterval(deadlockCheckRef.current);
+            }, [gameState, multiMode, isHost]);
+
             const handleLogin = () => {
-                if(playerName.trim()) {
+                if (playerName.trim()) {
                     localStorage.setItem('pkmnPlayerName', playerName.trim());
+                    setLoginError('');
                     setGameState('LOBBY_MAIN');
                 } else {
-                    alert("Namanya diisi dulu ya!");
+                    setLoginError('Namanya diisi dulu ya!');
                 }
             };
 
@@ -271,7 +438,39 @@
                 return newBoard;
             }, []);
 
-            // --- SISTEM PRE-LOAD GAMBAR (ANTI-KOSONG) ---
+            // Guaranteed shuffle — no 20-attempt limit
+            const guaranteedShuffle = (currentBoard) => {
+                let tiles = []; let pos = [];
+                for (let r = 1; r <= ROWS; r++) {
+                    for (let c = 1; c <= COLS; c++) {
+                        if (currentBoard[r][c] !== 0) { tiles.push(currentBoard[r][c]); pos.push({r, c}); }
+                    }
+                }
+                if (tiles.length === 0) return currentBoard;
+                let newB = [...currentBoard.map(row => [...row])];
+                
+                // Try up to 50 random shuffles
+                for (let attempt = 0; attempt < 50; attempt++) {
+                    tiles.sort(() => Math.random() - 0.5);
+                    for (let i = 0; i < pos.length; i++) { newB[pos[i].r][pos[i].c] = tiles[i]; }
+                    if (findHint(newB)) return newB;
+                }
+                
+                // Forced fallback: pair first two tiles that share same id and move them to adjacent corners
+                for (let i = 0; i < tiles.length; i++) {
+                    for (let j = i + 1; j < tiles.length; j++) {
+                        if (tiles[i] === tiles[j]) {
+                            // Place them at border-adjacent positions
+                            newB[pos[0].r][pos[0].c] = tiles[i];
+                            newB[pos[1].r][pos[1].c] = tiles[j];
+                            if (findHint(newB)) return newB;
+                        }
+                    }
+                }
+                return newB; // last resort, return as-is
+            };
+
+            // --- PRE-LOAD IMAGES ---
             const preloadBoardImages = async (boardData) => {
                 setGameState('LOADING_BOARD');
                 setProgress(0); 
@@ -289,19 +488,11 @@
                     return new Promise((resolve) => {
                         const img = new Image();
                         img.src = `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${id}.png`;
-                        img.onload = () => {
-                            loadedCount++;
-                            setProgress(Math.floor((loadedCount / ids.length) * 100));
-                            resolve();
-                        };
-                        img.onerror = () => {
-                            loadedCount++; 
-                            resolve();
-                        };
+                        img.onload = () => { loadedCount++; setProgress(Math.floor((loadedCount / ids.length) * 100)); resolve(); };
+                        img.onerror = () => { loadedCount++; resolve(); };
                     });
                 });
 
-                // Timeout maksimal 8 detik
                 const timeoutPromise = new Promise(resolve => setTimeout(resolve, 8000));
                 await Promise.race([Promise.all(loadPromises), timeoutPromise]);
             };
@@ -310,8 +501,10 @@
                 const b = providedBoard || generateBoard();
                 setBoard(b);
                 setLevel(startLevel);
+                levelRef.current = startLevel;
                 if (startLevel === 1) {
                     setScore(0); setHp(3); setHints(3); setShuffles(3); setOpponentScore(0);
+                    setIsNewRecord(false);
                 }
                 
                 await preloadBoardImages(b);
@@ -319,38 +512,27 @@
                 if (multiMode === 'SINGLE') {
                     runCountdownThenPlay(Date.now());
                 } else {
-                    // Sinyal ke lawan: kita sudah selesai loading
                     channelRef.current?.publish('action', { type: 'PLAYER_LOADED' });
                     setGameState('WAITING_BOTH_LOADED');
 
                     if (isHost) {
                         hostSelfLoadedRef.current = true;
-                        // Kalau guest sudah loaded duluan, langsung mulai
-                        if (hostLoadedCountRef.current >= 1) {
-                            triggerSyncedStart();
-                        }
+                        if (hostLoadedCountRef.current >= 1) triggerSyncedStart();
                     }
-                    // Guest cukup tunggu — host yang akan kirim START_AT
                 }
             };
 
-            // Host memanggil ini saat kedua pemain sudah loaded
-            // Kirim timestamp absolut "mulai countdown" ke semua → semua hitung delay sendiri
             const triggerSyncedStart = () => {
                 hostLoadedCountRef.current = 0;
                 hostSelfLoadedRef.current = false;
-                // Beri jeda 500ms agar pesan sampai ke guest sebelum countdown dimulai
                 const startAt = Date.now() + 500;
                 channelRef.current?.publish('action', { type: 'START_AT', startAt });
-                // Host juga jalankan sendiri berdasarkan timestamp yang sama
                 runCountdownThenPlay(startAt);
             };
 
-            // Jalankan countdown berdasarkan timestamp absolut (sama di semua device)
             const runCountdownThenPlay = (startAt) => {
                 setProgress(100);
                 setGameState('COUNTDOWN');
-                // Angka countdown: 3 detik sebelum startAt, 2 detik, 1 detik, GO, lalu main
                 const steps = [
                     { label: 3, offset: -3000 },
                     { label: 2, offset: -2000 },
@@ -359,9 +541,12 @@
                 ];
                 steps.forEach(({ label, offset }) => {
                     const delay = Math.max(0, (startAt + offset) - Date.now());
-                    setTimeout(() => setCountdown(label), delay);
+                    setTimeout(() => {
+                        setCountdown(label);
+                        AudioEngine.tick(label);
+                    }, delay);
                 });
-                const playDelay = Math.max(0, (startAt + 700) - Date.now()); // 700ms setelah GO!
+                const playDelay = Math.max(0, (startAt + 700) - Date.now());
                 setTimeout(() => {
                     setCountdown(null);
                     setSelectedTile(null);
@@ -374,7 +559,6 @@
                 }, playDelay);
             };
 
-            // finalizeStart masih dipakai untuk restart dari PAUSED dll
             const finalizeStart = () => {
                 setCountdown(null);
                 setSelectedTile(null);
@@ -387,13 +571,7 @@
                 statsRef.current = { myConnects: 0, allyConnects: 0, myTotalTime: 0, allyTotalTime: 0, lastActionTime: Date.now() };
             };
 
-            // ============================================================
-            // AUTO MATCHMAKING — FIXED ARCHITECTURE
-            // Fix #1: attach() dulu sebelum presence.get() → hindari race condition
-            // Fix #2: host subscribe presence 'enter' → bukan polling
-            // Fix #3: guest attach ke room channel dulu sebelum kirim GUEST_JOIN
-            // Fix #4: cleanup channel lama agar tidak double-subscribe
-            // ============================================================
+            // ===================== MATCHMAKING =====================
             const cleanupChannels = () => {
                 if (matchmakingChannelRef.current) {
                     try { matchmakingChannelRef.current.presence.leave(); } catch(e) {}
@@ -402,7 +580,7 @@
                     matchmakingChannelRef.current = null;
                 }
                 if (channelRef.current) {
-                    try { channelRef.current.presence.leave(); } catch(e) {} // sinyal ke lawan bahwa kita keluar
+                    try { channelRef.current.presence.leave(); } catch(e) {}
                     try { channelRef.current.unsubscribe(); } catch(e) {}
                     try { channelRef.current.presence.unsubscribe(); } catch(e) {}
                     channelRef.current = null;
@@ -421,48 +599,30 @@
                 const lobbyChannel = ably.channels.get(`pkmn-lobby-${mode}-v2`);
                 matchmakingChannelRef.current = lobbyChannel;
 
-                // WAJIB: attach dulu, baru akses presence — ini root cause bug lama
                 lobbyChannel.attach((attachErr) => {
-                    if (attachErr) {
-                        console.error('Lobby attach error:', attachErr);
-                        setGameState('LOBBY_MAIN');
-                        return;
-                    }
+                    if (attachErr) { setGameState('LOBBY_MAIN'); return; }
 
                     lobbyChannel.presence.get((err, members) => {
-                        // Filter hanya member yang punya data roomId valid
                         const waitingHosts = (members || []).filter(m => m.data && m.data.roomId && m.clientId !== globalClientId);
 
                         if (err || waitingHosts.length === 0) {
-                            // === JADI HOST ===
                             setIsHost(true);
                             const newRoomId = Math.random().toString(36).substr(2, 8);
-
                             const privateChannel = ably.channels.get(`pkmn-room-${newRoomId}`);
                             channelRef.current = privateChannel;
 
-                            // Attach room channel dulu, baru enter lobby
                             privateChannel.attach((roomAttachErr) => {
                                 if (roomAttachErr) { setGameState('LOBBY_MAIN'); return; }
-
-                                // Subscribe listener setelah channel siap
                                 setupRoomListeners(privateChannel, true, mode);
-
-                                // Masuk presence lobby sebagai host — visible ke guest
                                 lobbyChannel.presence.enter({ roomId: newRoomId, hostName: playerName }, (presErr) => {
                                     if (presErr) console.error('Presence enter error:', presErr);
                                 });
-
-                                // Tunggu guest join via presence event (bukan polling)
                                 lobbyChannel.presence.subscribe('enter', (member) => {
-                                    if (member.clientId === globalClientId) return; // abaikan echo diri sendiri
-                                    // Ada guest masuk lobby — artinya guest sedang kirim GUEST_JOIN ke room channel
-                                    // Tidak perlu tindakan di sini, sudah ditangani di setupRoomListeners
+                                    if (member.clientId === globalClientId) return;
                                 });
                             });
 
                         } else {
-                            // === JADI GUEST ===
                             setIsHost(false);
                             const targetHost = waitingHosts[0];
                             const targetRoom = targetHost.data.roomId;
@@ -471,17 +631,10 @@
                             const privateChannel = ably.channels.get(`pkmn-room-${targetRoom}`);
                             channelRef.current = privateChannel;
 
-                            // Fix #3: attach room channel dulu sebelum publish GUEST_JOIN
-                            // agar host sudah pasti bisa terima pesan
                             privateChannel.attach((roomAttachErr) => {
                                 if (roomAttachErr) { setGameState('LOBBY_MAIN'); return; }
-
                                 setupRoomListeners(privateChannel, false, mode);
-
-                                // Sekarang aman untuk publish — host sudah subscribe
                                 privateChannel.publish('action', { type: 'GUEST_JOIN', guestName: playerName });
-
-                                // Keluar dari lobby agar tidak diambil guest lain
                                 lobbyChannel.presence.leave();
                             });
                         }
@@ -490,17 +643,13 @@
             };
 
             const setupRoomListeners = (ch, amIHost, mode) => {
-                // Unsubscribe dulu jaga-jaga ada listener lama
                 ch.unsubscribe('action');
-
                 ch.subscribe('action', (msg) => {
                     const data = msg.data;
 
                     if (data.type === 'GUEST_JOIN' && amIHost) {
                         setOpponentName(data.guestName);
-                        // Keluar dari lobby agar tidak diambil guest lain
                         try { matchmakingChannelRef.current?.presence.leave(); } catch(e) {}
-
                         const newB = generateBoard();
                         ch.publish('action', { type: 'START_GAME_SYNC', board: newB, mode: mode, hostName: playerName });
                         prepareLevel(1, newB);
@@ -512,40 +661,41 @@
                         prepareLevel(1, data.board);
                     }
 
-                    // ---- TIMESTAMP-BASED SYNC SYSTEM ----
-                    // Guest kirim PLAYER_LOADED → host terima, cek apakah dirinya juga sudah loaded
-                    // Kalau iya → host publish START_AT (timestamp absolut)
-                    // Kedua device hitung delay sendiri → countdown mulai persis bersamaan
                     if (data.type === 'PLAYER_LOADED' && amIHost) {
                         hostLoadedCountRef.current += 1;
-                        if (hostSelfLoadedRef.current) {
-                            triggerSyncedStart();
-                        }
-                        // Kalau host belum selesai loading, triggerSyncedStart()
-                        // akan dipanggil dari prepareLevel saat host selesai
+                        if (hostSelfLoadedRef.current) triggerSyncedStart();
                     }
 
-                    if (data.type === 'START_AT') {
-                        // Diterima oleh guest (dan host tidak terima karena echoMessages:false)
-                        runCountdownThenPlay(data.startAt);
-                    }
+                    if (data.type === 'START_AT') runCountdownThenPlay(data.startAt);
 
-                    if (data.type === 'VS_SCORE') setOpponentScore(s => s + data.delta); // FIX: gunakan delta bukan nilai absolut
+                    if (data.type === 'VS_SCORE') setOpponentScore(s => s + data.delta);
                     if (data.type === 'COOP_MATCH') handleRemoteMatch(data.r1, data.c1, data.r2, data.c2, data.path);
 
                     if (data.type === 'NEXT_LEVEL_SYNC' && !amIHost) {
+                        setProgress(100); // reset timer saat level baru
                         prepareLevel(data.level, data.board);
                     }
 
                     if (data.type === 'SYNC_SHUFFLE' && !amIHost) setBoard(data.board);
+
+                    // Guest bisa request shuffle di co-op
+                    if (data.type === 'REQUEST_SHUFFLE' && amIHost) {
+                        const newB = guaranteedShuffle(boardRef.current);
+                        setBoard(newB);
+                        setShuffles(s => Math.max(0, s - 1));
+                        ch.publish('action', { type: 'SYNC_SHUFFLE', board: newB });
+                    }
+
+                    // Rematch
+                    if (data.type === 'REMATCH_SYNC' && !amIHost) {
+                        setMultiMode(mode);
+                        prepareLevel(1, data.board);
+                    }
                 });
 
-                // Handle lawan disconnect
                 ch.presence.subscribe('leave', (member) => {
                     if (member.clientId !== globalClientId) {
                         setGameState('GAMEOVER');
-                        setCoopSummary(prev => prev); // trigger re-render
-                        // Tampilkan pesan disconnect via flag
                         setConnectionStatus('opponent_left');
                     }
                 });
@@ -558,9 +708,10 @@
                 setGameState('LOBBY_MAIN');
             };
 
+            // ===================== TIMER =====================
             useEffect(() => {
                 if (gameState !== 'PLAYING') return;
-                const speed = 0.10 + (level * 0.05); 
+                const speed = getTimerSpeed(level);
                 const timer = setInterval(() => {
                     setProgress(prev => {
                         if (prev <= 0) { clearInterval(timer); handleTimeout(); return 0; }
@@ -577,9 +728,20 @@
                     myTotalTime: statsRef.current.myTotalTime,
                     allyTotalTime: statsRef.current.allyTotalTime,
                 });
-                setGameState(isGameOver ? 'GAMEOVER' : 'WON');
 
-                // Jika Single Player atau Versus, lewat otomatis setelah 2.5 detik
+                if (isGameOver) {
+                    AudioEngine.gameOver();
+                    setGameState('GAMEOVER');
+                } else {
+                    // Board clear flash before WON
+                    AudioEngine.levelClear();
+                    setShowBoardClear(true);
+                    setTimeout(() => {
+                        setShowBoardClear(false);
+                        setGameState('WON');
+                    }, 500);
+                }
+
                 if (!isGameOver && multiMode !== 'COOP') {
                     setTimeout(() => {
                         const newB = generateBoard();
@@ -592,43 +754,36 @@
             };
 
             const handleTimeout = () => {
-                if (hp > 1) {
-                    setHp(h => h - 1);
-                    // FIX: di VERSUS maupun COOP, hanya host yang generate & broadcast board baru
-                    if (multiMode !== 'SINGLE' && !isHost) return;
-                    const newB = generateBoard();
-                    
-                    if (isHost && multiMode !== 'SINGLE') {
-                        channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: level });
+                AudioEngine.timeout();
+                // Show timeout flash overlay first
+                setShowTimeoutFlash(true);
+                setTimeout(() => {
+                    setShowTimeoutFlash(false);
+                    if (hp > 1) {
+                        setHp(h => h - 1);
+                        if (multiMode !== 'SINGLE' && !isHost) return;
+                        const newB = generateBoard();
+                        if (isHost && multiMode !== 'SINGLE') {
+                            channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: level });
+                        }
+                        prepareLevel(level, newB); 
+                    } else {
+                        triggerLevelEndStats(true);
                     }
-                    prepareLevel(level, newB); 
-                } else {
-                    triggerLevelEndStats(true);
-                }
+                }, 1000);
             };
 
-            const performShuffle = (currentBoard) => {
-                let tiles = []; let pos = [];
-                for (let r = 1; r <= ROWS; r++) {
-                    for (let c = 1; c <= COLS; c++) {
-                        if (currentBoard[r][c] !== 0) { tiles.push(currentBoard[r][c]); pos.push({r, c}); }
-                    }
-                }
-                if (tiles.length === 0) return currentBoard;
-                let newB = [...currentBoard.map(row => [...row])];
-                let valid = false; let attempts = 0;
-                while (!valid && attempts < 20) {
-                    tiles.sort(() => Math.random() - 0.5);
-                    for (let i = 0; i < pos.length; i++) { newB[pos[i].r][pos[i].c] = tiles[i]; }
-                    if (findHint(newB)) valid = true;
-                    attempts++;
-                }
-                return newB;
-            };
+            const performShuffle = (currentBoard) => guaranteedShuffle(currentBoard);
 
             const handleShuffleClick = () => {
                 if (shuffles > 0 && gameState === 'PLAYING' && !isAnimating.current) {
+                    if (multiMode === 'COOP' && !isHost) {
+                        // Guest request shuffle ke host
+                        channelRef.current?.publish('action', { type: 'REQUEST_SHUFFLE' });
+                        return;
+                    }
                     setShuffles(s => s - 1);
+                    AudioEngine.shuffle();
                     const newB = performShuffle(board);
                     setBoard(newB);
                     setSelectedTile(null);
@@ -641,6 +796,7 @@
                     const hintData = findHint(board);
                     if (hintData) {
                         setHints(h => h - 1);
+                        AudioEngine.hint();
                         setHintActiveTiles([{r: hintData.p1.r, c: hintData.p1.c}, {r: hintData.p2.r, c: hintData.p2.c}]);
                         setTimeout(() => { if(!isAnimating.current) setHintActiveTiles([]); }, 1200); 
                     }
@@ -658,7 +814,7 @@
                 }
                 if (!findHint(b)) {
                     if (multiMode === 'COOP' && !isHost) return; 
-                    const newB = performShuffle(b);
+                    const newB = guaranteedShuffle(b);
                     setBoard(newB);
                     if (multiMode === 'COOP' && isHost) channelRef.current?.publish('action', { type: 'SYNC_SHUFFLE', board: newB });
                 }
@@ -666,7 +822,6 @@
             };
 
             const handleRemoteMatch = useCallback((r1, c1, r2, c2, path) => {
-                // FIX desync: jika sedang ada match lokal yang diproses, tolak remote match
                 if (isAnimating.current || pendingMatchRef.current) return;
                 pendingMatchRef.current = true;
                 isAnimating.current = true;
@@ -681,8 +836,6 @@
                 }
 
                 setMatchedTiles([ {r: r1, c: c1, id: b[r1][c1]}, {r: r2, c: c2, id: b[r2][c2]} ]);
-
-                // Catat statistik remote
                 const now = Date.now();
                 statsRef.current.allyTotalTime += (now - statsRef.current.lastActionTime);
                 statsRef.current.allyConnects += 1;
@@ -695,7 +848,6 @@
                         checkLevelComplete(newBoard);
                         return newBoard;
                     });
-                    
                     setSelectedTile(null); setActivePath(null); setMatchedTiles([]); 
                     setScore(s => s + 10); setProgress(p => Math.min(100, p + 4)); 
                     isAnimating.current = false;
@@ -715,19 +867,23 @@
                     pendingMatchRef.current = true;
                     setHintActiveTiles([]); 
                     setActivePath(path);
+                    AudioEngine.match();
                     
                     const r1 = selectedTile.r; const c1 = selectedTile.c;
                     const id1 = board[r1][c1]; const id2 = board[r][c];
                     setMatchedTiles([ {r: r1, c: c1, id: id1}, {r, c, id: id2} ]);
 
-                    // Catat statistik lokal
                     const now = Date.now();
                     statsRef.current.myTotalTime += (now - statsRef.current.lastActionTime);
                     statsRef.current.myConnects += 1;
                     statsRef.current.lastActionTime = now;
 
                     if (multiMode === 'COOP') channelRef.current?.publish('action', { type: 'COOP_MATCH', r1, c1, r2: r, c2: c, path });
-                    if (multiMode === 'VERSUS') channelRef.current?.publish('action', { type: 'VS_SCORE', delta: 10 }); // FIX: kirim delta
+                    if (multiMode === 'VERSUS') channelRef.current?.publish('action', { type: 'VS_SCORE', delta: 10 });
+
+                    // Timer add feedback
+                    setShowTimerAdd(true);
+                    setTimeout(() => setShowTimerAdd(false), 900);
 
                     setTimeout(() => {
                         const newBoard = [...board.map(row => [...row])];
@@ -737,9 +893,11 @@
                         setSelectedTile(null); setActivePath(null); setMatchedTiles([]); 
                         setScore(s => {
                             const ns = s + 10;
-                            // Simpan high score
                             const best = parseInt(localStorage.getItem('pkmnBestScore') || '0');
-                            if (ns > best) localStorage.setItem('pkmnBestScore', ns);
+                            if (ns > best) {
+                                localStorage.setItem('pkmnBestScore', ns);
+                                setIsNewRecord(true);
+                            }
                             return ns;
                         });
                         setProgress(p => Math.min(100, p + 4)); 
@@ -749,26 +907,38 @@
                     }, 350); 
 
                 } else {
-                    // FIX: feedback visual salah klik
+                    AudioEngine.wrong();
                     setWrongTile({r, c});
                     setTimeout(() => setWrongTile(null), 380);
                     setSelectedTile({r, c});
                 }
             };
 
-            // Helpers untuk Layar Laporan (Report Card)
+            const handleRematch = () => {
+                if (isHost) {
+                    const newB = generateBoard();
+                    channelRef.current?.publish('action', { type: 'REMATCH_SYNC', board: newB });
+                    prepareLevel(1, newB);
+                } else {
+                    // Guest menunggu host rematch — bisa tampilkan waiting state
+                    // Untuk sekarang: kembali ke lobby
+                    cleanupChannels();
+                    setMultiMode('SINGLE');
+                    setGameState('LOBBY_MAIN');
+                }
+            };
+
+            // ===================== CO-OP STATS =====================
             const getAvgTime = () => {
                 const total = coopSummary.myConnects + coopSummary.allyConnects;
                 if(total === 0) return "0.0";
                 return ((coopSummary.myTotalTime + coopSummary.allyTotalTime) / total / 1000).toFixed(1);
             };
-
             const getMVP = () => {
                 if(coopSummary.myConnects > coopSummary.allyConnects) return playerName;
                 if(coopSummary.allyConnects > coopSummary.myConnects) return opponentName;
                 return "Seimbang";
             };
-
             const getRating = () => {
                 const avg = parseFloat(getAvgTime());
                 if (avg === 0) return { grade: '-', color: 'text-gray-400' };
@@ -786,30 +956,21 @@
                         {isGameOver ? 'WAKTU HABIS!' : `LEVEL ${level} CLEAR!`}
                     </h2>
                     <p className="text-sm text-gray-400 font-bold mb-4 tracking-widest uppercase">Laporan Co-op</p>
-                    
-                    <div className={`text-7xl font-black mb-6 ${getRating().color}`}>
-                        {getRating().grade}
-                    </div>
-                    
+                    <div className={`text-7xl font-black mb-6 ${getRating().color}`}>{getRating().grade}</div>
                     <div className="w-full space-y-2 mb-6">
-                        <div className="flex justify-between bg-pink-50/80 p-2.5 rounded-xl font-bold text-sm">
-                            <span className="text-gray-500">Pemain MVP</span>
-                            <span className="text-purple-600">{getMVP()}</span>
-                        </div>
-                        <div className="flex justify-between bg-pink-50/80 p-2.5 rounded-xl font-bold text-sm">
-                            <span className="text-gray-500">Rata-rata Waktu</span>
-                            <span className="text-blue-500">{getAvgTime()} Detik</span>
-                        </div>
-                        <div className="flex justify-between bg-pink-50/80 p-2.5 rounded-xl font-bold text-sm">
-                            <span className="text-gray-500">{playerName} (Kamu)</span>
-                            <span className="text-teal-500">{coopSummary.myConnects} Pasang</span>
-                        </div>
-                        <div className="flex justify-between bg-pink-50/80 p-2.5 rounded-xl font-bold text-sm">
-                            <span className="text-gray-500">{opponentName} (Partner)</span>
-                            <span className="text-red-400">{coopSummary.allyConnects} Pasang</span>
-                        </div>
+                        {[
+                            { label: 'Pemain MVP', val: getMVP(), color: 'text-purple-600' },
+                            { label: 'Rata-rata Waktu', val: `${getAvgTime()} Detik`, color: 'text-blue-500' },
+                            { label: `${playerName} (Kamu)`, val: `${coopSummary.myConnects} Pasang`, color: 'text-teal-500' },
+                            { label: `${opponentName} (Partner)`, val: `${coopSummary.allyConnects} Pasang`, color: 'text-red-400' },
+                        ].map((row, i) => (
+                            <div key={i} className="flex justify-between bg-pink-50/80 p-2.5 rounded-xl font-bold text-sm"
+                                style={{ animation: `slideInUp 0.3s ease-out ${i * 0.08}s both` }}>
+                                <span className="text-gray-500">{row.label}</span>
+                                <span className={row.color}>{row.val}</span>
+                            </div>
+                        ))}
                     </div>
-                    
                     {isGameOver ? (
                         <button onClick={() => { cleanupChannels(); setMultiMode('SINGLE'); setGameState('LOBBY_MAIN'); }} className="cute-btn-text w-full py-3 text-lg font-bold bg-gradient-to-r from-red-400 to-pink-500">Keluar ke Menu</button>
                     ) : isHost ? (
@@ -827,11 +988,14 @@
                 </div>
             );
 
+            // Seconds left display
+            const secondsLeft = getSecondsLeft(progress, level);
+
             return (
                 <div className="w-full h-[100dvh] bg-pink-100 flex items-center justify-center p-1 sm:p-2">
                     <div className="w-full max-w-[480px] h-full flex flex-col bg-white border-[3px] border-pink-300 rounded-xl shadow-lg overflow-hidden relative">
                         
-                        {/* ===================== KEPALA ===================== */}
+                        {/* ===================== HEADER ===================== */}
                         <div className="w-full bg-pink-50 p-2 sm:p-3 flex flex-col gap-1 sm:gap-2 shrink-0 border-b-[2px] border-pink-200 z-50 relative">
                             {multiMode !== 'SINGLE' && (
                                 <div className="w-full bg-white/80 rounded-full px-3 py-1 flex justify-between items-center text-xs font-bold shadow-sm border border-pink-100 mb-1">
@@ -848,32 +1012,44 @@
                                     <IconHeart /><span className="ml-1 text-xs sm:text-sm font-bold text-pink-500">{hp}</span>
                                 </div>
                                 <div className="text-lg sm:text-xl font-bold text-pink-500 flex items-center gap-1">Level {level}</div>
-                                <div className="flex-1 max-w-[90px] sm:max-w-[100px] bg-white rounded-full h-3 sm:h-4 p-[2px] shadow-inner border border-pink-200 relative overflow-hidden">
-                                    <div className="h-full rounded-full transition-all duration-200 ease-linear"
-                                        style={{ width: `${progress}%`, backgroundImage: progress > 50 ? 'linear-gradient(to right, #a78bfa, #f472b6)' : progress > 25 ? 'linear-gradient(to right, #fde047, #f59e0b)' : 'linear-gradient(to right, #fca5a5, #ef4444)' }}
-                                    />
-                                </div>
-                            </div>
-                            <div className="flex justify-between items-center mt-1">
-                                <div className="text-xs sm:text-sm font-bold bg-white px-3 py-1 sm:px-4 sm:py-1.5 rounded-full text-pink-500 border border-pink-200 tracking-wide shadow-sm">
-                                    Skor: {score}
-                                </div>
-                                <div className="flex gap-1.5 sm:gap-2">
-                                    <button onClick={handleHintClick} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center relative shadow-sm"><IconSearch /><span className="absolute -top-1 -right-1 bg-pink-500 text-white text-[9px] sm:text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{hints}</span></button>
-                                    <button onClick={handleShuffleClick} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center relative shadow-sm"><IconRefresh /><span className="absolute -top-1 -right-1 bg-purple-500 text-white text-[9px] sm:text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{shuffles}</span></button>
-                                    {/* Pause hanya aktif di single player */}
-                                    {multiMode === 'SINGLE' && (
-                                        <button onClick={() => setGameState('PAUSED')} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center text-pink-500 shadow-sm"><IconPause /></button>
+                                {/* Timer bar with seconds label */}
+                                <div className="flex items-center gap-1">
+                                    <span className="text-[10px] font-bold text-gray-400 w-6 text-right">{secondsLeft}s</span>
+                                    <div className="w-[80px] sm:w-[100px] bg-white rounded-full h-3 sm:h-4 p-[2px] shadow-inner border border-pink-200 relative overflow-hidden">
+                                        <div className="h-full rounded-full transition-all duration-200 ease-linear"
+                                            style={{ width: `${progress}%`, backgroundImage: progress > 50 ? 'linear-gradient(to right, #a78bfa, #f472b6)' : progress > 25 ? 'linear-gradient(to right, #fde047, #f59e0b)' : 'linear-gradient(to right, #fca5a5, #ef4444)' }}
+                                        />
+                                    </div>
+                                    {/* Timer add float text */}
+                                    {showTimerAdd && (
+                                        <span className="absolute right-[85px] top-[28px] text-[10px] font-black text-emerald-500 float-text z-[60]">+waktu</span>
                                     )}
                                 </div>
                             </div>
+                            <div className="flex justify-between items-center mt-0.5">
+                                <div className="text-xs sm:text-sm font-bold bg-white px-3 py-1 sm:px-4 sm:py-1.5 rounded-full text-pink-500 border border-pink-200 tracking-wide shadow-sm">
+                                    Skor: {score}
+                                </div>
+                                <div className="flex gap-1.5 sm:gap-2 items-center">
+                                    <button onClick={handleHintClick} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center relative shadow-sm"><IconSearch /><span className="absolute -top-1 -right-1 bg-pink-500 text-white text-[9px] sm:text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{hints}</span></button>
+                                    <button onClick={handleShuffleClick} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center relative shadow-sm"><IconRefresh /><span className="absolute -top-1 -right-1 bg-purple-500 text-white text-[9px] sm:text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{shuffles}</span></button>
+                                    {multiMode === 'SINGLE' && (
+                                        <button onClick={() => setGameState('PAUSED')} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center text-pink-500 shadow-sm"><IconPause /></button>
+                                    )}
+                                    <button onClick={() => setIsMuted(m => !m)} className="mute-btn w-8 h-8 sm:w-9 sm:h-9 text-pink-400">
+                                        <IconMute muted={isMuted} />
+                                    </button>
+                                </div>
+                            </div>
+                            {/* Timer hint subtitle */}
+                            <p className="text-[9px] text-center text-gray-300 font-bold -mt-0.5">+waktu tiap connect Pokémon</p>
                         </div>
 
-                        {/* ===================== BADAN GRID ===================== */}
-                        <div className="flex-1 w-full relative bg-white p-[1px] sm:p-[2px]">
+                        {/* ===================== GRID BODY ===================== */}
+                        <div className="flex-1 w-full relative bg-white p-0">
                             {board.length > 0 && (
                                 <>
-                                    <svg viewBox={`0 0 ${COLS + 2} ${ROWS + 2}`} preserveAspectRatio="none" className="absolute inset-[1px] sm:inset-[2px] w-[calc(100%-2px)] sm:w-[calc(100%-4px)] h-[calc(100%-2px)] sm:h-[calc(100%-4px)] pointer-events-none" style={{ zIndex: 10 }}>
+                                    <svg viewBox={`0 0 ${COLS + 2} ${ROWS + 2}`} preserveAspectRatio="none" className="absolute inset-0 w-full h-full pointer-events-none" style={{ zIndex: 10 }}>
                                         {activePath && (
                                             <g>
                                                 <path d={`M ${activePath.map(p => `${p.c + 0.5} ${p.r + 0.5}`).join(' L ')}`} fill="none" stroke="#f472b6" strokeWidth="0.18" strokeLinecap="round" strokeLinejoin="round" className="path-line-outer drop-shadow-sm"/>
@@ -882,9 +1058,13 @@
                                         )}
                                     </svg>
 
-                                    <div className="absolute inset-[1px] sm:inset-[2px] grid gap-[1.5px] sm:gap-[2px]" style={{ zIndex: 20, gridTemplateColumns: `repeat(${COLS + 2}, 1fr)`, gridTemplateRows: `repeat(${ROWS + 2}, 1fr)` }}>
+                                    {/* Grid: only render inner COLS x ROWS (no border cells in DOM) */}
+                                    <div className="absolute inset-0 grid" style={{ zIndex: 20, gridTemplateColumns: `repeat(${COLS + 2}, 1fr)`, gridTemplateRows: `repeat(${ROWS + 2}, 1fr)`, gap: '0px' }}>
                                         {board.map((row, r) => row.map((cellId, c) => {
-                                            if (r === 0 || r === ROWS + 1 || c === 0 || c === COLS + 1) return <div key={`${r}-${c}`} className="w-full h-full pointer-events-none"></div>;
+                                            // Border cells: invisible spacer for connect-line routing
+                                            if (r === 0 || r === ROWS + 1 || c === 0 || c === COLS + 1) {
+                                                return <div key={`${r}-${c}`} className="w-full h-full pointer-events-none" />;
+                                            }
 
                                             const isSelected = selectedTile && selectedTile.r === r && selectedTile.c === c;
                                             const matchingTile = matchedTiles.find(m => m.r === r && m.c === c);
@@ -894,14 +1074,14 @@
                                             const isEmpty = cellId === 0 && !isMatching;
 
                                             return (
-                                                <div key={`${r}-${c}`} className="relative w-full h-full p-[0.5px]">
+                                                <div key={`${r}-${c}`} className="relative w-full h-full" style={{ padding: '1px' }}>
                                                     {!isEmpty && (
                                                         <button 
                                                             className={`cute-tile ${isSelected ? 'selected' : ''} ${isMatching ? 'matched' : ''} ${isHinting ? 'hint-glow' : ''} ${isWrong ? 'wrong' : ''}`}
                                                             style={{ WebkitTapHighlightColor: 'transparent' }}
                                                             onClick={() => handleTileClick(r, c)}
                                                         >
-                                                            <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${isMatching ? matchingTile.id : cellId}.png`} alt="pokemon" className="w-[95%] h-[95%] object-contain pointer-events-none drop-shadow-sm"/>
+                                                            <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${isMatching ? matchingTile.id : cellId}.png`} alt="pokemon" className="w-full h-full object-contain pointer-events-none" style={{ padding: '1px' }}/>
                                                         </button>
                                                     )}
                                                 </div>
@@ -912,10 +1092,23 @@
                             )}
                         </div>
 
-                        {/* Connection status indicator */}
+                        {/* Connection status */}
                         {connectionStatus === 'disconnected' && (
                             <div className="absolute top-0 left-0 right-0 bg-red-400 text-white text-center text-xs font-bold py-1 z-[200]">
-                                Koneksi terputus, mencoba sambung ulang...
+                                ! Koneksi terputus, mencoba sambung ulang...
+                            </div>
+                        )}
+
+                        {/* Board clear flash */}
+                        {showBoardClear && (
+                            <div className="absolute inset-0 bg-white board-clear-flash z-[90] pointer-events-none" />
+                        )}
+
+                        {/* Timeout flash */}
+                        {showTimeoutFlash && (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center z-[95] timeout-flash pointer-events-none" style={{ background: 'rgba(239,68,68,0.85)' }}>
+                                <span className="text-white text-3xl font-black drop-shadow-lg">Waktu Habis!</span>
+                                <span className="text-white text-lg font-bold mt-2">-1 HP</span>
                             </div>
                         )}
 
@@ -927,10 +1120,12 @@
                                 <p className="text-gray-500 font-bold mb-6">Siapa namamu?</p>
                                 <input 
                                     type="text" placeholder="Masukkan Nama" maxLength={12}
-                                    className="border-4 border-pink-200 rounded-xl px-4 py-3 text-center text-xl font-bold text-gray-700 w-3/4 max-w-[250px] mb-6 focus:outline-none focus:border-pink-400 transition-colors"
-                                    value={playerName} onChange={e => setPlayerName(e.target.value)}
+                                    className="border-4 border-pink-200 rounded-xl px-4 py-3 text-center text-xl font-bold text-gray-700 w-3/4 max-w-[250px] focus:outline-none focus:border-pink-400 transition-colors"
+                                    value={playerName} onChange={e => { setPlayerName(e.target.value); setLoginError(''); }}
                                     onKeyDown={e => e.key === 'Enter' && handleLogin()}
                                 />
+                                {loginError && <p className="text-red-400 text-sm font-bold mt-2">{loginError}</p>}
+                                <div className="mb-6" />
                                 <button onClick={handleLogin} className="cute-btn-text w-3/4 max-w-[250px] py-3 text-lg font-bold">Mulai!</button>
                             </div>
                         )}
@@ -940,7 +1135,6 @@
                                 <h1 className="text-4xl font-black text-pink-500 mb-1 drop-shadow-sm text-center">POKÉMON<br/>CONNECT</h1>
                                 <h2 className="text-lg font-bold text-purple-400 mb-2">Halo, {playerName}!</h2>
                                 {(() => { const best = parseInt(localStorage.getItem('pkmnBestScore') || '0'); return best > 0 ? <p className="text-sm text-pink-300 font-bold mb-6">Best Score: {best}</p> : <div className="mb-6"></div>; })()}
-                                
                                 <div className="flex flex-col gap-4 w-3/4 max-w-[250px]">
                                     <button onClick={() => prepareLevel(1)} className="cute-btn-text py-3 text-lg font-bold">Main Sendiri</button>
                                     <button onClick={() => startMatchmaking('COOP')} className="cute-btn-text py-3 text-lg font-bold bg-gradient-to-r from-teal-400 to-emerald-400">Mode Co-op</button>
@@ -1011,7 +1205,7 @@
                             </div>
                         )}
 
-                        {/* WON & GAMEOVER (CO-OP REPORT CARD VS STANDARD) */}
+                        {/* GAMEOVER */}
                         {gameState === 'GAMEOVER' && (
                             <div className="absolute inset-0 bg-pink-50/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100] p-4">
                                 {multiMode === 'COOP' ? renderCoopStatsCard(true) : (
@@ -1036,25 +1230,48 @@
                                                             <span className={`text-2xl font-black ${!iWin && !isDraw ? 'text-green-400' : 'text-red-400'}`}>{opponentScore}</span>
                                                         </div>
                                                     </div>
-                                                    <button onClick={() => { cleanupChannels(); setMultiMode('SINGLE'); setGameState('LOBBY_MAIN'); }} className="cute-btn-text bg-gradient-to-r from-red-400 to-pink-500 px-8 py-3 text-lg font-bold">Kembali ke Menu</button>
+                                                    <button onClick={handleRematch} className="cute-btn-text bg-gradient-to-r from-purple-400 to-pink-500 px-8 py-3 text-lg font-bold mb-3">
+                                                        {isHost ? 'Main Lagi' : 'Kembali ke Menu'}
+                                                    </button>
+                                                    <button onClick={() => { cleanupChannels(); setMultiMode('SINGLE'); setGameState('LOBBY_MAIN'); }} className="text-gray-400 font-bold underline text-sm">Keluar ke Menu</button>
                                                 </>
                                             );
                                         })() : (
                                             <>
                                                 <h2 className="text-3xl font-black text-red-400 mb-2">WAKTU HABIS!</h2>
-                                                <p className="text-lg text-gray-500 font-bold mb-1">Skormu: <span className="text-pink-500 text-3xl">{score}</span></p>
-                                                {(() => { const best = parseInt(localStorage.getItem('pkmnBestScore') || '0'); return best > 0 && <p className="text-sm text-purple-400 font-bold mb-2">Best: {best}</p>; })()}
-                                                <button onClick={() => { cleanupChannels(); setMultiMode('SINGLE'); setGameState('LOBBY_MAIN'); }} className="cute-btn-text bg-gradient-to-r from-red-400 to-pink-500 px-8 py-3 text-lg font-bold mt-6">Kembali ke Menu</button>
+                                                {/* Single player stats */}
+                                                <div className="w-full max-w-[280px] bg-white border-2 border-pink-200 rounded-2xl p-4 mb-4 space-y-2">
+                                                    {[
+                                                        { label: 'Skor Akhir', val: score, big: true },
+                                                        { label: 'Level Tertinggi', val: level },
+                                                        { label: 'Hint Dipakai', val: 3 - hints },
+                                                        { label: 'Shuffle Dipakai', val: 3 - shuffles },
+                                                    ].map((row, i) => (
+                                                        <div key={i} className="flex justify-between bg-pink-50 p-2.5 rounded-xl font-bold text-sm"
+                                                            style={{ animation: `slideInUp 0.3s ease-out ${i * 0.07}s both` }}>
+                                                            <span className="text-gray-500">{row.label}</span>
+                                                            <span className={`${row.big ? 'text-pink-500 text-xl' : 'text-purple-500'}`}>{row.val}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                {isNewRecord && (
+                                                    <div className="record-pop bg-yellow-400 text-white font-black px-4 py-2 rounded-full mb-3 text-lg shadow-lg">
+                                                        REKOR BARU!
+                                                    </div>
+                                                )}
+                                                {(() => { const best = parseInt(localStorage.getItem('pkmnBestScore') || '0'); return best > 0 && !isNewRecord && <p className="text-sm text-purple-400 font-bold mb-3">Best: {best}</p>; })()}
+                                                <button onClick={() => { cleanupChannels(); setMultiMode('SINGLE'); setGameState('LOBBY_MAIN'); }} className="cute-btn-text bg-gradient-to-r from-red-400 to-pink-500 px-8 py-3 text-lg font-bold">Kembali ke Menu</button>
                                             </>
                                         )}
                                         {connectionStatus === 'opponent_left' && (
-                                            <p className="text-xs text-orange-400 font-bold mt-3">Lawan telah keluar dari permainan</p>
+                                            <p className="text-xs text-orange-400 font-bold mt-3">! Lawan telah keluar dari permainan</p>
                                         )}
                                     </>
                                 )}
                             </div>
                         )}
 
+                        {/* WON */}
                         {gameState === 'WON' && (
                             <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100] p-4">
                                 {multiMode === 'COOP' ? renderCoopStatsCard(false) : (
