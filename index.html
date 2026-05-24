@@ -84,6 +84,16 @@
             60%  { transform: scale(1.05); }
             100% { transform: scale(1); opacity: 1; }
         }
+
+        @keyframes wrongShake {
+            0%   { transform: translateX(0); border-color: #ef4444; }
+            20%  { transform: translateX(-4px); }
+            40%  { transform: translateX(4px); }
+            60%  { transform: translateX(-3px); }
+            80%  { transform: translateX(3px); }
+            100% { transform: translateX(0); border-color: #fbcfe8; }
+        }
+        .cute-tile.wrong { animation: wrongShake 0.35s ease-out forwards; border-color: #ef4444; background-color: #fff1f2; }
     </style>
 </head>
 <body>
@@ -190,6 +200,8 @@
             const [matchedTiles, setMatchedTiles] = useState([]); 
             const [hintActiveTiles, setHintActiveTiles] = useState([]); 
             const [activePath, setActivePath] = useState(null); 
+            const [wrongTile, setWrongTile] = useState(null); // {r, c} tile yang salah klik
+            const [connectionStatus, setConnectionStatus] = useState('connected'); // 'connected' | 'disconnected'
 
             // Multiplayer States
             const [multiMode, setMultiMode] = useState('SINGLE'); 
@@ -206,6 +218,7 @@
             const channelRef = useRef(null);
             const matchmakingChannelRef = useRef(null);
             const boardRef = useRef(board);
+            const pendingMatchRef = useRef(false); // COOP: lock agar tidak double-match bersamaan
             // Timestamp-based sync: host kirim waktu mulai absolut, kedua device hitung sendiri
             const startAtRef = useRef(null);
             // Tracking loading multiplayer
@@ -213,6 +226,15 @@
             const hostSelfLoadedRef = useRef(false);
             
             useEffect(() => { boardRef.current = board; }, [board]);
+
+            // Monitor koneksi Ably
+            useEffect(() => {
+                ably.connection.on('connected', () => setConnectionStatus('connected'));
+                ably.connection.on('disconnected', () => setConnectionStatus('disconnected'));
+                ably.connection.on('suspended', () => setConnectionStatus('disconnected'));
+                ably.connection.on('failed', () => setConnectionStatus('disconnected'));
+                return () => ably.connection.off();
+            }, []);
 
             const handleLogin = () => {
                 if(playerName.trim()) {
@@ -380,11 +402,15 @@
                     matchmakingChannelRef.current = null;
                 }
                 if (channelRef.current) {
+                    try { channelRef.current.presence.leave(); } catch(e) {} // sinyal ke lawan bahwa kita keluar
                     try { channelRef.current.unsubscribe(); } catch(e) {}
+                    try { channelRef.current.presence.unsubscribe(); } catch(e) {}
                     channelRef.current = null;
                 }
                 hostLoadedCountRef.current = 0;
                 hostSelfLoadedRef.current = false;
+                pendingMatchRef.current = false;
+                setConnectionStatus('connected');
             };
 
             const startMatchmaking = (mode) => {
@@ -504,7 +530,7 @@
                         runCountdownThenPlay(data.startAt);
                     }
 
-                    if (data.type === 'VS_SCORE') setOpponentScore(data.score);
+                    if (data.type === 'VS_SCORE') setOpponentScore(s => s + data.delta); // FIX: gunakan delta bukan nilai absolut
                     if (data.type === 'COOP_MATCH') handleRemoteMatch(data.r1, data.c1, data.r2, data.c2, data.path);
 
                     if (data.type === 'NEXT_LEVEL_SYNC' && !amIHost) {
@@ -513,6 +539,17 @@
 
                     if (data.type === 'SYNC_SHUFFLE' && !amIHost) setBoard(data.board);
                 });
+
+                // Handle lawan disconnect
+                ch.presence.subscribe('leave', (member) => {
+                    if (member.clientId !== globalClientId) {
+                        setGameState('GAMEOVER');
+                        setCoopSummary(prev => prev); // trigger re-render
+                        // Tampilkan pesan disconnect via flag
+                        setConnectionStatus('opponent_left');
+                    }
+                });
+                ch.presence.enter({ name: amIHost ? 'host' : 'guest' }).catch(e => console.warn('presence enter fail', e));
             };
 
             const cancelMatchmaking = () => {
@@ -557,7 +594,8 @@
             const handleTimeout = () => {
                 if (hp > 1) {
                     setHp(h => h - 1);
-                    if (multiMode === 'COOP' && !isHost) return; 
+                    // FIX: di VERSUS maupun COOP, hanya host yang generate & broadcast board baru
+                    if (multiMode !== 'SINGLE' && !isHost) return;
                     const newB = generateBoard();
                     
                     if (isHost && multiMode !== 'SINGLE') {
@@ -628,12 +666,19 @@
             };
 
             const handleRemoteMatch = useCallback((r1, c1, r2, c2, path) => {
+                // FIX desync: jika sedang ada match lokal yang diproses, tolak remote match
+                if (isAnimating.current || pendingMatchRef.current) return;
+                pendingMatchRef.current = true;
                 isAnimating.current = true;
                 setHintActiveTiles([]); 
                 setActivePath(path);
                 
                 const b = boardRef.current;
-                if (b[r1][c1] === 0 || b[r2][c2] === 0) { isAnimating.current = false; return; }
+                if (b[r1][c1] === 0 || b[r2][c2] === 0) { 
+                    isAnimating.current = false; 
+                    pendingMatchRef.current = false;
+                    return; 
+                }
 
                 setMatchedTiles([ {r: r1, c: c1, id: b[r1][c1]}, {r: r2, c: c2, id: b[r2][c2]} ]);
 
@@ -654,11 +699,12 @@
                     setSelectedTile(null); setActivePath(null); setMatchedTiles([]); 
                     setScore(s => s + 10); setProgress(p => Math.min(100, p + 4)); 
                     isAnimating.current = false;
+                    pendingMatchRef.current = false;
                 }, 350);
             }, []);
 
             const handleTileClick = (r, c) => {
-                if (gameState !== 'PLAYING' || isAnimating.current || board[r][c] === 0) return;
+                if (gameState !== 'PLAYING' || isAnimating.current || pendingMatchRef.current || board[r][c] === 0) return;
                 if (selectedTile && selectedTile.r === r && selectedTile.c === c) { setSelectedTile(null); return; }
                 if (!selectedTile) { setSelectedTile({r, c}); return; }
 
@@ -666,6 +712,7 @@
                 
                 if (path) {
                     isAnimating.current = true;
+                    pendingMatchRef.current = true;
                     setHintActiveTiles([]); 
                     setActivePath(path);
                     
@@ -680,7 +727,7 @@
                     statsRef.current.lastActionTime = now;
 
                     if (multiMode === 'COOP') channelRef.current?.publish('action', { type: 'COOP_MATCH', r1, c1, r2: r, c2: c, path });
-                    if (multiMode === 'VERSUS') channelRef.current?.publish('action', { type: 'VS_SCORE', score: score + 10 });
+                    if (multiMode === 'VERSUS') channelRef.current?.publish('action', { type: 'VS_SCORE', delta: 10 }); // FIX: kirim delta
 
                     setTimeout(() => {
                         const newBoard = [...board.map(row => [...row])];
@@ -688,12 +735,23 @@
                         setBoard(newBoard);
                         
                         setSelectedTile(null); setActivePath(null); setMatchedTiles([]); 
-                        setScore(s => s + 10); setProgress(p => Math.min(100, p + 4)); 
+                        setScore(s => {
+                            const ns = s + 10;
+                            // Simpan high score
+                            const best = parseInt(localStorage.getItem('pkmnBestScore') || '0');
+                            if (ns > best) localStorage.setItem('pkmnBestScore', ns);
+                            return ns;
+                        });
+                        setProgress(p => Math.min(100, p + 4)); 
                         isAnimating.current = false;
+                        pendingMatchRef.current = false;
                         checkLevelComplete(newBoard);
                     }, 350); 
 
                 } else {
+                    // FIX: feedback visual salah klik
+                    setWrongTile({r, c});
+                    setTimeout(() => setWrongTile(null), 380);
                     setSelectedTile({r, c});
                 }
             };
@@ -803,7 +861,10 @@
                                 <div className="flex gap-1.5 sm:gap-2">
                                     <button onClick={handleHintClick} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center relative shadow-sm"><IconSearch /><span className="absolute -top-1 -right-1 bg-pink-500 text-white text-[9px] sm:text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{hints}</span></button>
                                     <button onClick={handleShuffleClick} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center relative shadow-sm"><IconRefresh /><span className="absolute -top-1 -right-1 bg-purple-500 text-white text-[9px] sm:text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{shuffles}</span></button>
-                                    <button onClick={() => setGameState('PAUSED')} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center text-pink-500 shadow-sm"><IconPause /></button>
+                                    {/* Pause hanya aktif di single player */}
+                                    {multiMode === 'SINGLE' && (
+                                        <button onClick={() => setGameState('PAUSED')} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center text-pink-500 shadow-sm"><IconPause /></button>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -829,13 +890,14 @@
                                             const matchingTile = matchedTiles.find(m => m.r === r && m.c === c);
                                             const isMatching = !!matchingTile;
                                             const isHinting = hintActiveTiles.find(h => h.r === r && h.c === c);
+                                            const isWrong = wrongTile && wrongTile.r === r && wrongTile.c === c;
                                             const isEmpty = cellId === 0 && !isMatching;
 
                                             return (
                                                 <div key={`${r}-${c}`} className="relative w-full h-full p-[0.5px]">
                                                     {!isEmpty && (
                                                         <button 
-                                                            className={`cute-tile ${isSelected ? 'selected' : ''} ${isMatching ? 'matched' : ''} ${isHinting ? 'hint-glow' : ''}`}
+                                                            className={`cute-tile ${isSelected ? 'selected' : ''} ${isMatching ? 'matched' : ''} ${isHinting ? 'hint-glow' : ''} ${isWrong ? 'wrong' : ''}`}
                                                             style={{ WebkitTapHighlightColor: 'transparent' }}
                                                             onClick={() => handleTileClick(r, c)}
                                                         >
@@ -849,6 +911,13 @@
                                 </>
                             )}
                         </div>
+
+                        {/* Connection status indicator */}
+                        {connectionStatus === 'disconnected' && (
+                            <div className="absolute top-0 left-0 right-0 bg-red-400 text-white text-center text-xs font-bold py-1 z-[200]">
+                                ⚠ Koneksi terputus, mencoba sambung ulang...
+                            </div>
+                        )}
 
                         {/* ===================== OVERLAYS ===================== */}
                         
@@ -869,7 +938,8 @@
                         {gameState === 'LOBBY_MAIN' && (
                             <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
                                 <h1 className="text-4xl font-black text-pink-500 mb-1 drop-shadow-sm text-center">POKÉMON<br/>CONNECT</h1>
-                                <h2 className="text-lg font-bold text-purple-400 mb-8">Halo, {playerName}!</h2>
+                                <h2 className="text-lg font-bold text-purple-400 mb-2">Halo, {playerName}!</h2>
+                                {(() => { const best = parseInt(localStorage.getItem('pkmnBestScore') || '0'); return best > 0 ? <p className="text-sm text-pink-300 font-bold mb-6">🏆 Best Score: {best}</p> : <div className="mb-6"></div>; })()}
                                 
                                 <div className="flex flex-col gap-4 w-3/4 max-w-[250px]">
                                     <button onClick={() => prepareLevel(1)} className="cute-btn-text py-3 text-lg font-bold">Main Sendiri</button>
@@ -946,10 +1016,40 @@
                             <div className="absolute inset-0 bg-pink-50/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100] p-4">
                                 {multiMode === 'COOP' ? renderCoopStatsCard(true) : (
                                     <>
-                                        <h2 className="text-3xl font-black text-red-400 mb-2">WAKTU HABIS!</h2>
-                                        <p className="text-lg text-gray-500 font-bold mb-1">Skormu: <span className="text-pink-500 text-3xl">{score}</span></p>
-                                        {multiMode === 'VERSUS' && <p className="text-lg text-gray-500 font-bold mb-6">Skor {opponentName}: <span className="text-red-400 text-3xl">{opponentScore}</span></p>}
-                                        <button onClick={() => { cleanupChannels(); setMultiMode('SINGLE'); setGameState('LOBBY_MAIN'); }} className="cute-btn-text bg-gradient-to-r from-red-400 to-pink-500 px-8 py-3 text-lg font-bold mt-6">Kembali ke Menu</button>
+                                        {multiMode === 'VERSUS' ? (() => {
+                                            const iWin = score > opponentScore;
+                                            const isDraw = score === opponentScore;
+                                            return (
+                                                <>
+                                                    <div className={`text-5xl font-black mb-1 ${iWin ? 'text-green-400' : isDraw ? 'text-yellow-400' : 'text-red-400'}`}>
+                                                        {iWin ? '🏆 MENANG!' : isDraw ? '🤝 SERI!' : '💀 KALAH!'}
+                                                    </div>
+                                                    <p className="text-sm text-gray-400 font-bold mb-4">Waktu Habis!</p>
+                                                    <div className="w-full max-w-[260px] bg-white border-2 border-pink-200 rounded-2xl p-4 mb-4 space-y-2">
+                                                        <div className="flex justify-between items-center">
+                                                            <span className="font-bold text-gray-600">{playerName} (Kamu)</span>
+                                                            <span className={`text-2xl font-black ${iWin ? 'text-green-400' : 'text-pink-400'}`}>{score}</span>
+                                                        </div>
+                                                        <div className="border-t border-pink-100"></div>
+                                                        <div className="flex justify-between items-center">
+                                                            <span className="font-bold text-gray-600">{opponentName}</span>
+                                                            <span className={`text-2xl font-black ${!iWin && !isDraw ? 'text-green-400' : 'text-red-400'}`}>{opponentScore}</span>
+                                                        </div>
+                                                    </div>
+                                                    <button onClick={() => { cleanupChannels(); setMultiMode('SINGLE'); setGameState('LOBBY_MAIN'); }} className="cute-btn-text bg-gradient-to-r from-red-400 to-pink-500 px-8 py-3 text-lg font-bold">Kembali ke Menu</button>
+                                                </>
+                                            );
+                                        })() : (
+                                            <>
+                                                <h2 className="text-3xl font-black text-red-400 mb-2">WAKTU HABIS!</h2>
+                                                <p className="text-lg text-gray-500 font-bold mb-1">Skormu: <span className="text-pink-500 text-3xl">{score}</span></p>
+                                                {(() => { const best = parseInt(localStorage.getItem('pkmnBestScore') || '0'); return best > 0 && <p className="text-sm text-purple-400 font-bold mb-2">Best: {best}</p>; })()}
+                                                <button onClick={() => { cleanupChannels(); setMultiMode('SINGLE'); setGameState('LOBBY_MAIN'); }} className="cute-btn-text bg-gradient-to-r from-red-400 to-pink-500 px-8 py-3 text-lg font-bold mt-6">Kembali ke Menu</button>
+                                            </>
+                                        )}
+                                        {connectionStatus === 'opponent_left' && (
+                                            <p className="text-xs text-orange-400 font-bold mt-3">⚠ Lawan telah keluar dari permainan</p>
+                                        )}
                                     </>
                                 )}
                             </div>
