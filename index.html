@@ -317,22 +317,19 @@
             const [elapsed, setElapsed] = React.useState(0);
             const [dots, setDots] = React.useState('');
             const [timedOut, setTimedOut] = React.useState(false);
-
             React.useEffect(() => {
                 const start = Date.now();
                 const tick = setInterval(() => {
                     const s = Math.floor((Date.now() - start) / 1000);
                     setElapsed(s);
                     setDots(prev => prev.length >= 3 ? '' : prev + '.');
-                    if (s >= 30 && !timedOut) setTimedOut(true);
+                    if (s >= 30) setTimedOut(true);
                 }, 500);
                 return () => clearInterval(tick);
             }, []);
-
             const modeLabel = multiMode === 'COOP' ? 'Co-op' : 'Versus';
             const modeColor = multiMode === 'COOP' ? 'text-teal-500' : 'text-red-500';
             const spinColor = multiMode === 'COOP' ? 'border-teal-400' : 'border-red-400';
-
             return (
                 <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100] px-6">
                     {!timedOut ? (
@@ -410,11 +407,18 @@
             const hostSelfLoadedRef = useRef(false);
             const progressRef = useRef(100);
             const levelRef = useRef(1);
+            // Matchmaking refs
+            const isHostRef = useRef(true);
+            const multiModeRef = useRef('SINGLE');
             const guestJoinSentRef = useRef(false);
+            const matchmakingTimerRef = useRef(null);
+            const gameMatchedRef = useRef(false); // prevent double-match
             
             useEffect(() => { boardRef.current = board; }, [board]);
             useEffect(() => { progressRef.current = progress; }, [progress]);
             useEffect(() => { levelRef.current = level; }, [level]);
+            useEffect(() => { isHostRef.current = isHost; }, [isHost]);
+            useEffect(() => { multiModeRef.current = multiMode; }, [multiMode]);
 
             // Mute toggle
             useEffect(() => {
@@ -558,13 +562,15 @@
                 
                 await preloadBoardImages(b);
 
-                if (multiMode === 'SINGLE') {
-                    runCountdownThenPlay(Date.now());
+                // Use refs here — never stale state
+                if (multiModeRef.current === 'SINGLE') {
+                    runCountdownThenPlay(Date.now() + 3700);
                 } else {
+                    // Signal that this player finished loading
                     channelRef.current?.publish('action', { type: 'PLAYER_LOADED' });
                     setGameState('WAITING_BOTH_LOADED');
 
-                    if (isHost) {
+                    if (isHostRef.current) {
                         hostSelfLoadedRef.current = true;
                         if (hostLoadedCountRef.current >= 1) triggerSyncedStart();
                     }
@@ -574,7 +580,8 @@
             const triggerSyncedStart = () => {
                 hostLoadedCountRef.current = 0;
                 hostSelfLoadedRef.current = false;
-                const startAt = Date.now() + 500;
+                // Give 4.2s from now: 3 + 2 + 1 + GO! countdown slots, plus small buffer
+                const startAt = Date.now() + 4200;
                 channelRef.current?.publish('action', { type: 'START_AT', startAt });
                 runCountdownThenPlay(startAt);
             };
@@ -622,6 +629,7 @@
 
             // ===================== MATCHMAKING =====================
             const cleanupChannels = () => {
+                if (matchmakingTimerRef.current) { clearTimeout(matchmakingTimerRef.current); matchmakingTimerRef.current = null; }
                 if (matchmakingChannelRef.current) {
                     try { matchmakingChannelRef.current.presence.leave(); } catch(e) {}
                     try { matchmakingChannelRef.current.unsubscribe(); } catch(e) {}
@@ -636,94 +644,119 @@
                 }
                 hostLoadedCountRef.current = 0;
                 hostSelfLoadedRef.current = false;
-                pendingMatchRef.current = false;  // FIX: always reset on cleanup
+                pendingMatchRef.current = false;
                 guestJoinSentRef.current = false;
+                gameMatchedRef.current = false;
                 setConnectionStatus('connected');
+            };
+
+            // Called when this client decides to become Host
+            const becomeHost = (lobbyChannel, mode) => {
+                if (gameMatchedRef.current) return;
+                const newRoomId = Math.random().toString(36).substr(2, 8);
+                const privateChannel = ably.channels.get(`pkmn-room-${newRoomId}`);
+                channelRef.current = privateChannel;
+
+                privateChannel.attach((err) => {
+                    if (err || gameMatchedRef.current) return;
+                    // Subscribe to room BEFORE announcing in lobby
+                    setupRoomListeners(privateChannel, true, mode);
+                    // Now announce in lobby so guests can find us
+                    lobbyChannel.presence.enter({ roomId: newRoomId, hostName: playerName }, (presErr) => {
+                        if (presErr) console.error('Presence enter error:', presErr);
+                    });
+                });
+            };
+
+            // Called when this client decides to become Guest for a given host
+            const becomeGuest = (lobbyChannel, hostMember, mode) => {
+                if (gameMatchedRef.current) return;
+                gameMatchedRef.current = true;
+
+                const targetRoom = hostMember.data.roomId;
+                setOpponentName(hostMember.data.hostName);
+                setIsHost(false);
+                isHostRef.current = false;
+
+                const privateChannel = ably.channels.get(`pkmn-room-${targetRoom}`);
+                channelRef.current = privateChannel;
+
+                privateChannel.attach((err) => {
+                    if (err) { cleanupChannels(); setGameState('LOBBY_MAIN'); return; }
+                    // Subscribe first, then leave lobby, then announce arrival
+                    setupRoomListeners(privateChannel, false, mode);
+                    try { lobbyChannel.presence.leave(); } catch(e) {}
+                    try { matchmakingChannelRef.current?.unsubscribe(); } catch(e) {}
+                    try { matchmakingChannelRef.current?.presence.unsubscribe(); } catch(e) {}
+
+                    // Small delay so host's channel subscription is definitely up
+                    setTimeout(() => {
+                        if (!guestJoinSentRef.current && channelRef.current) {
+                            guestJoinSentRef.current = true;
+                            privateChannel.publish('action', { type: 'GUEST_READY', guestName: playerName });
+                        }
+                    }, 400);
+                });
             };
 
             const startMatchmaking = (mode) => {
                 cleanupChannels();
                 setMultiMode(mode);
+                multiModeRef.current = mode;
+                setIsHost(true);
+                isHostRef.current = true;
                 setGameState('MATCHMAKING');
 
-                // FIX: use a versioned channel name per session to avoid stale presence data
-                const lobbyChannel = ably.channels.get(`pkmn-lobby-${mode}-v3`);
+                // Use a fresh channel name to avoid ghost presence from old sessions
+                const lobbyChannel = ably.channels.get(`pkmn-lobby-${mode}-v4`);
                 matchmakingChannelRef.current = lobbyChannel;
 
                 lobbyChannel.attach((attachErr) => {
-                    if (attachErr) { console.error('Lobby attach error:', attachErr); setGameState('LOBBY_MAIN'); return; }
+                    if (attachErr) { setGameState('LOBBY_MAIN'); return; }
 
-                    // FIX: add small delay after attach before reading presence, to let Ably
-                    // sync the member list fully (avoids stale/empty presence on reconnect)
-                    setTimeout(() => {
-                        lobbyChannel.presence.get((err, members) => {
-                            // FIX: filter out stale hosts (present for >60s) which may be ghost entries
-                            const now = Date.now();
-                            const waitingHosts = (members || []).filter(m =>
-                                m.data && m.data.roomId && m.clientId !== globalClientId
-                            );
+                    // STRATEGY: 
+                    // 1) Subscribe to presence.enter FIRST (catches hosts that enter after us)
+                    // 2) Then do presence.get (catches hosts already waiting)
+                    // 3) If no host found after OBSERVE_WINDOW ms, become host ourselves
 
-                            if (err || waitingHosts.length === 0) {
-                                // --- BECOME HOST ---
-                                setIsHost(true);
-                                const newRoomId = Math.random().toString(36).substr(2, 8);
-                                const privateChannel = ably.channels.get(`pkmn-room-${newRoomId}`);
-                                channelRef.current = privateChannel;
+                    const OBSERVE_WINDOW = 1200; // wait this long before committing to host role
+                    let observeTimer = null;
+                    let foundHost = false;
 
-                                privateChannel.attach((roomAttachErr) => {
-                                    if (roomAttachErr) { console.error('Room attach error:', roomAttachErr); setGameState('LOBBY_MAIN'); return; }
+                    // Step 1: Watch for any host that enters while we're observing
+                    lobbyChannel.presence.subscribe('enter', (member) => {
+                        if (member.clientId === globalClientId) return;
+                        if (member.data && member.data.roomId && !foundHost && !gameMatchedRef.current) {
+                            foundHost = true;
+                            if (observeTimer) { clearTimeout(observeTimer); observeTimer = null; }
+                            becomeGuest(lobbyChannel, member, mode);
+                        }
+                    });
 
-                                    // FIX: subscribe to room BEFORE entering lobby presence,
-                                    // so we never miss a GUEST_READY message
-                                    setupRoomListeners(privateChannel, true, mode);
+                    // Step 2: Check who's already waiting
+                    lobbyChannel.presence.get((err, members) => {
+                        if (gameMatchedRef.current) return;
+                        const waitingHosts = (members || []).filter(m =>
+                            m.data && m.data.roomId && m.clientId !== globalClientId
+                        );
 
-                                    lobbyChannel.presence.enter({ roomId: newRoomId, hostName: playerName, ts: Date.now() }, (presErr) => {
-                                        if (presErr) console.error('Presence enter error:', presErr);
-                                    });
+                        if (!err && waitingHosts.length > 0 && !foundHost) {
+                            foundHost = true;
+                            if (observeTimer) { clearTimeout(observeTimer); observeTimer = null; }
+                            becomeGuest(lobbyChannel, waitingHosts[0], mode);
+                            return;
+                        }
 
-                                    // FIX: lobby presence subscribe was empty before — now handles
-                                    // the race where guest joins lobby AFTER host's presence.get()
-                                    // This path is no longer needed since guest goes directly to the
-                                    // private room, but we subscribe anyway for safety/logging.
-                                    lobbyChannel.presence.subscribe('enter', (member) => {
-                                        if (member.clientId === globalClientId) return;
-                                        // Guest found us via presence.get or shortly after — no action needed,
-                                        // guest will send GUEST_READY to our private room channel directly.
-                                    });
-                                });
-
-                            } else {
-                                // --- BECOME GUEST ---
-                                setIsHost(false);
-                                const targetHost = waitingHosts[0];
-                                const targetRoom = targetHost.data.roomId;
-                                setOpponentName(targetHost.data.hostName);
-
-                                const privateChannel = ably.channels.get(`pkmn-room-${targetRoom}`);
-                                channelRef.current = privateChannel;
-
-                                privateChannel.attach((roomAttachErr) => {
-                                    if (roomAttachErr) { console.error('Room attach error:', roomAttachErr); setGameState('LOBBY_MAIN'); return; }
-
-                                    // FIX: subscribe to room listener BEFORE publishing anything
-                                    setupRoomListeners(privateChannel, false, mode);
-
-                                    // FIX: leave lobby BEFORE sending join signal, so host can't
-                                    // accidentally match another player to us
-                                    try { lobbyChannel.presence.leave(); } catch(e) {}
-
-                                    // FIX: add a short delay after attach so host's subscribe()
-                                    // is guaranteed to be active before we publish
-                                    setTimeout(() => {
-                                        if (!guestJoinSentRef.current && channelRef.current) {
-                                            guestJoinSentRef.current = true;
-                                            privateChannel.publish('action', { type: 'GUEST_READY', guestName: playerName });
-                                        }
-                                    }, 300);
-                                });
-                            }
-                        });
-                    }, 400); // small presence-sync delay
+                        // Step 3: No host found yet — wait a bit, then become host
+                        if (!foundHost) {
+                            observeTimer = setTimeout(() => {
+                                if (!foundHost && !gameMatchedRef.current) {
+                                    becomeHost(lobbyChannel, mode);
+                                }
+                            }, OBSERVE_WINDOW);
+                            matchmakingTimerRef.current = observeTimer;
+                        }
+                    });
                 });
             };
 
@@ -732,29 +765,27 @@
                 ch.subscribe('action', (msg) => {
                     const data = msg.data;
 
-                    // FIX: renamed GUEST_JOIN → GUEST_READY so intent is clear,
-                    // and host only reacts once (idempotent guard via matchmakingChannelRef)
                     if (data.type === 'GUEST_READY' && amIHost) {
-                        // Guard: ignore if we already started a game (duplicate message protection)
-                        if (!matchmakingChannelRef.current) return;
+                        if (!matchmakingChannelRef.current && gameMatchedRef.current) return; // already started
+                        gameMatchedRef.current = true;
                         setOpponentName(data.guestName);
-                        // Leave lobby so no other guest can join
-                        try { matchmakingChannelRef.current.presence.leave(); } catch(e) {}
-                        try { matchmakingChannelRef.current.unsubscribe(); } catch(e) {}
-                        try { matchmakingChannelRef.current.presence.unsubscribe(); } catch(e) {}
+                        // Clean up lobby
+                        try { matchmakingChannelRef.current?.presence.leave(); } catch(e) {}
+                        try { matchmakingChannelRef.current?.unsubscribe(); } catch(e) {}
+                        try { matchmakingChannelRef.current?.presence.unsubscribe(); } catch(e) {}
                         matchmakingChannelRef.current = null;
 
                         const newB = generateBoard();
-                        // FIX: send START_GAME_SYNC with a small delay so guest's subscribe
-                        // is fully established before the message arrives
+                        // Delay slightly so guest subscription is stable before message arrives
                         setTimeout(() => {
-                            ch.publish('action', { type: 'START_GAME_SYNC', board: newB, mode: mode, hostName: playerName });
-                        }, 150);
+                            ch.publish('action', { type: 'START_GAME_SYNC', board: newB, mode, hostName: playerName });
+                        }, 200);
                         prepareLevel(1, newB);
                     }
 
                     if (data.type === 'START_GAME_SYNC' && !amIHost) {
                         setMultiMode(data.mode);
+                        multiModeRef.current = data.mode;
                         setOpponentName(data.hostName);
                         prepareLevel(1, data.board);
                     }
@@ -764,6 +795,7 @@
                         if (hostSelfLoadedRef.current) triggerSyncedStart();
                     }
 
+                    // Both players run countdown from identical absolute timestamp — true sync
                     if (data.type === 'START_AT') runCountdownThenPlay(data.startAt);
 
                     if (data.type === 'VS_SCORE') setOpponentScore(s => s + data.delta);
@@ -776,7 +808,6 @@
 
                     if (data.type === 'SYNC_SHUFFLE' && !amIHost) setBoard(data.board);
 
-                    // Guest bisa request shuffle di co-op
                     if (data.type === 'REQUEST_SHUFFLE' && amIHost) {
                         const newB = guaranteedShuffle(boardRef.current);
                         setBoard(newB);
@@ -784,15 +815,14 @@
                         ch.publish('action', { type: 'SYNC_SHUFFLE', board: newB });
                     }
 
-                    // Rematch
                     if (data.type === 'REMATCH_SYNC' && !amIHost) {
                         setMultiMode(mode);
+                        multiModeRef.current = mode;
                         prepareLevel(1, data.board);
                     }
                 });
 
-                // FIX: only fire opponent_left if we're currently in an active game state
-                // (avoid false triggers during setup/transition)
+                // Opponent disconnect — only trigger during active game
                 ch.presence.subscribe('leave', (member) => {
                     if (member.clientId === globalClientId) return;
                     setGameState(prev => {
@@ -810,6 +840,7 @@
             const cancelMatchmaking = () => {
                 cleanupChannels();
                 setMultiMode('SINGLE');
+                multiModeRef.current = 'SINGLE';
                 setGameState('LOBBY_MAIN');
             };
 
@@ -847,10 +878,10 @@
                     }, 500);
                 }
 
-                if (!isGameOver && multiMode !== 'COOP') {
+                if (!isGameOver && multiModeRef.current !== 'COOP') {
                     setTimeout(() => {
                         const newB = generateBoard();
-                        if (isHost && multiMode !== 'SINGLE') {
+                        if (isHostRef.current && multiModeRef.current !== 'SINGLE') {
                             channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: level + 1 });
                         }
                         prepareLevel(level + 1, newB);
@@ -860,18 +891,17 @@
 
             const handleTimeout = () => {
                 AudioEngine.timeout();
-                // Show timeout flash overlay first
                 setShowTimeoutFlash(true);
                 setTimeout(() => {
                     setShowTimeoutFlash(false);
                     if (hp > 1) {
                         setHp(h => h - 1);
-                        if (multiMode !== 'SINGLE' && !isHost) return;
+                        if (multiModeRef.current !== 'SINGLE' && !isHostRef.current) return;
                         const newB = generateBoard();
-                        if (isHost && multiMode !== 'SINGLE') {
-                            channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: level });
+                        if (isHostRef.current && multiModeRef.current !== 'SINGLE') {
+                            channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: levelRef.current });
                         }
-                        prepareLevel(level, newB); 
+                        prepareLevel(levelRef.current, newB); 
                     } else {
                         triggerLevelEndStats(true);
                     }
