@@ -1,0 +1,701 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pokémon Connect Multiplayer Kawaii</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind & React -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Ably Realtime untuk Multiplayer -->
+    <script src="https://cdn.ably.com/lib/ably.min-1.js"></script>
+    
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #fce7f3; /* pink-100 */
+            touch-action: none;
+            overflow: hidden;
+            user-select: none;
+            -webkit-user-select: none;
+            font-family: 'Quicksand', sans-serif;
+        }
+
+        /* Tombol Lucu */
+        .cute-button {
+            background-color: white;
+            color: #ec4899;
+            border: 2px solid #fbcfe8;
+            border-radius: 50%;
+            transition: all 0.1s ease;
+            outline: none;
+        }
+        .cute-button:active {
+            transform: scale(0.9);
+            background-color: #fdf2f8;
+        }
+        .cute-btn-text {
+            background: linear-gradient(to right, #f472b6, #c084fc);
+            color: white;
+            border-radius: 9999px;
+            box-shadow: 0 4px 0 #d8b4fe, 0 6px 10px rgba(0,0,0,0.15);
+            transition: all 0.1s;
+        }
+        .cute-btn-text:active {
+            transform: translateY(4px);
+            box-shadow: 0 0 0 #d8b4fe, 0 2px 4px rgba(0,0,0,0.15);
+        }
+
+        /* Kartu Pokemon */
+        .cute-tile {
+            background-color: white;
+            border: 1.5px solid #fbcfe8;
+            border-radius: 6px;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            /* Transisi reguler (saat tidak mati) */
+            transition: transform 0.15s ease-out, border-color 0.15s ease-out;
+            position: relative;
+        }
+        
+        .cute-tile.selected {
+            background-color: #fff1f2;
+            border: 2px solid #ec4899;
+            transform: scale(1.12);
+            box-shadow: 0 4px 12px rgba(236, 72, 153, 0.4);
+            z-index: 30;
+        }
+
+        /* ANIMASI SINKRON KARTU: Mengambang lalu memudar */
+        .cute-tile.matched {
+            /* Memudar (Opacity) ditunda 0.2s, lalu menghilang dalam 0.15s = total 0.35s! */
+            transition: transform 0.2s ease-out, opacity 0.15s ease-out 0.2s; 
+            opacity: 0;
+            transform: scale(1.2) translateY(-12px);
+            pointer-events: none;
+            z-index: 40;
+            box-shadow: 0 0 15px rgba(251, 191, 36, 0.8);
+            border-color: #fbbf24;
+        }
+
+        /* ANIMASI SINKRON GARIS: Meluncur, Diam Sebentar, lalu Memudar Bareng Kartu */
+        @keyframes drawAndFadeJelly {
+            0%   { stroke-dashoffset: 100; opacity: 1; }
+            40%  { stroke-dashoffset: 0;   opacity: 1; } /* Selesai digambar */
+            60%  { stroke-dashoffset: 0;   opacity: 1; } /* Tahan sebentar */
+            100% { stroke-dashoffset: 0;   opacity: 0; } /* Menghilang bersamaan kartu di 0.35s */
+        }
+        .path-line-outer, .path-line-inner {
+            stroke-dasharray: 100;
+            /* Animasi garis berjalan tepat 0.35 detik untuk sinkronisasi mutlak */
+            animation: drawAndFadeJelly 0.35s ease-out forwards; 
+        }
+
+        /* Kedip Hint */
+        @keyframes pulseHint {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.7); }
+            50% { transform: scale(1.1); box-shadow: 0 0 0 8px rgba(251, 191, 36, 0); border-color: #fbbf24;}
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(251, 191, 36, 0); }
+        }
+        .hint-glow { animation: pulseHint 1s infinite; z-index: 25; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback, useRef } = React;
+
+        // Inisialisasi Ably
+        const ABLY_KEY = '4opURQ.FVPiqg:z5W8zQxWoBNlXmlAXvOv4Bz1bmn_ISnFucJGpjFijS8';
+        const ably = new Ably.Realtime({ key: ABLY_KEY });
+
+        const ROWS = 16; 
+        const COLS = 10;
+        
+        // 150+ Pokemon Lucu/Bayi
+        const ALL_CUTE_POKEMON = [
+            1, 4, 7, 10, 13, 16, 25, 27, 35, 37, 39, 43, 50, 52, 54, 58, 60, 74, 79, 86, 90, 104, 116, 133, 143, 147, 151, 
+            152, 155, 158, 161, 165, 172, 173, 174, 175, 179, 183, 187, 191, 194, 216, 220, 228, 231, 238, 246, 251, 252, 255, 
+            258, 261, 265, 270, 273, 280, 283, 285, 298, 300, 304, 307, 309, 311, 316, 320, 327, 331, 355, 361, 385, 387, 390, 
+            393, 396, 399, 401, 403, 406, 417, 425, 427, 431, 433, 438, 439, 440, 443, 446, 447, 453, 458, 489, 490, 495, 498, 
+            501, 504, 506, 509, 517, 522, 532, 546, 548, 572, 585, 587, 610, 653, 656, 659, 661, 664, 667, 669, 674, 677, 701, 
+            704, 707, 714, 722, 725, 728, 731, 736, 742, 747, 753, 755, 759, 761, 764, 775, 777, 778, 810, 813, 816, 819, 821, 
+            825, 827, 829, 846, 850, 854, 856, 872, 874, 877, 888, 906, 909, 912, 915, 917, 921, 925, 938, 946
+        ];
+
+        const IconHeart = () => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#fb7185" className="w-5 h-5"><path d="M11.645 20.91l-.007-.003-.022-.012a15.247 15.247 0 01-.383-.218 25.18 25.18 0 01-4.244-3.17C4.688 15.36 2.25 12.174 2.25 8.25 2.25 5.322 4.714 3 7.688 3A5.5 5.5 0 0112 5.052 5.5 5.5 0 0116.313 3c2.973 0 5.437 2.322 5.437 5.25 0 3.925-2.438 7.111-4.739 9.256a25.175 25.175 0 01-4.244 3.17 15.247 15.247 0 01-.383.219l-.022.012-.007.004-.003.001a.752.752 0 01-.704 0l-.003-.001z" /></svg>;
+        const IconSearch = () => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" /></svg>;
+        const IconRefresh = () => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>;
+        const IconPause = () => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6"><path fillRule="evenodd" d="M6.75 5.25a.75.75 0 01.75-.75H9a.75.75 0 01.75.75v13.5a.75.75 0 01-.75.75H7.5a.75.75 0 01-.75-.75V5.25zm7.5 0A.75.75 0 0115 4.5h1.5a.75.75 0 01.75.75v13.5a.75.75 0 01-.75.75H15a.75.75 0 01-.75-.75V5.25z" clipRule="evenodd" /></svg>;
+        const IconStar = () => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#fbbf24" stroke="#f59e0b" strokeWidth="1" className="w-5 h-5"><path fillRule="evenodd" d="M10.788 3.21c.448-1.077 1.976-1.077 2.424 0l2.082 5.006 5.404.434c1.164.093 1.636 1.545.749 2.305l-4.117 3.527 1.257 5.273c.271 1.136-.964 2.033-1.96 1.425L12 18.354 7.373 21.18c-.996.608-2.231-.29-1.96-1.425l1.257-5.273-4.117-3.527c-.887-.76-.415-2.212.749-2.305l5.404-.434 2.082-5.005Z" clipRule="evenodd" /></svg>;
+        const IconUser = () => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path fillRule="evenodd" d="M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z" clipRule="evenodd" /></svg>;
+
+        // --- ALGORITMA PATHFINDING ONET ---
+        const isPathClear = (board, r1, c1, r2, c2) => {
+            if (r1 === r2) {
+                const minC = Math.min(c1, c2); const maxC = Math.max(c1, c2);
+                for (let c = minC + 1; c < maxC; c++) if (board[r1][c] !== 0) return false;
+                return true;
+            }
+            if (c1 === c2) {
+                const minR = Math.min(r1, r2); const maxR = Math.max(r1, r2);
+                for (let r = minR + 1; r < maxR; r++) if (board[r][c1] !== 0) return false;
+                return true;
+            }
+            return false;
+        };
+
+        const getPath = (board, r1, c1, r2, c2) => {
+            if (r1 === r2 && c1 === c2) return null; 
+            if (board[r1][c1] !== board[r2][c2]) return null;
+            if (board[r1][c1] === 0) return null; 
+
+            if ((r1 === r2 || c1 === c2) && isPathClear(board, r1, c1, r2, c2)) return [{r: r1, c: c1}, {r: r2, c: c2}]; 
+            if (board[r1][c2] === 0 && isPathClear(board, r1, c1, r1, c2) && isPathClear(board, r1, c2, r2, c2)) return [{r: r1, c: c1}, {r: r1, c: c2}, {r: r2, c: c2}];
+            if (board[r2][c1] === 0 && isPathClear(board, r1, c1, r2, c1) && isPathClear(board, r2, c1, r2, c2)) return [{r: r1, c: c1}, {r: r2, c: c1}, {r: r2, c: c2}];
+
+            for (let dir = -1; dir <= 1; dir += 2) {
+                let c = c1 + dir;
+                while (c >= 0 && c < COLS + 2 && board[r1][c] === 0) {
+                    if (board[r2][c] === 0 && isPathClear(board, r1, c, r2, c) && isPathClear(board, r2, c, r2, c2)) return [{r: r1, c: c1}, {r: r1, c}, {r: r2, c}, {r: r2, c: c2}];
+                    c += dir;
+                }
+            }
+            for (let dir = -1; dir <= 1; dir += 2) {
+                let r = r1 + dir;
+                while (r >= 0 && r < ROWS + 2 && board[r][c1] === 0) {
+                    if (board[r][c2] === 0 && isPathClear(board, r, c1, r, c2) && isPathClear(board, r, c2, r2, c2)) return [{r: r1, c: c1}, {r, c: c1}, {r, c: c2}, {r: r2, c: c2}];
+                    r += dir;
+                }
+            }
+            return null; 
+        };
+
+        const findHint = (board) => {
+            for (let i = 1; i <= ROWS; i++) {
+                for (let j = 1; j <= COLS; j++) {
+                    if (board[i][j] !== 0) {
+                        for (let k = 1; k <= ROWS; k++) {
+                            for (let l = 1; l <= COLS; l++) {
+                                if ((i !== k || j !== l) && board[i][j] === board[k][l]) {
+                                    const path = getPath(board, i, j, k, l);
+                                    if (path) return {p1: {r: i, c: j}, p2: {r: k, c: l}, path};
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return null;
+        };
+
+        // --- KOMPONEN UTAMA ---
+        const App = () => {
+            const [board, setBoard] = useState([]);
+            const [level, setLevel] = useState(1);
+            const [score, setScore] = useState(0);
+            const [hp, setHp] = useState(3);
+            const [progress, setProgress] = useState(100);
+            
+            const [hints, setHints] = useState(3);
+            const [shuffles, setShuffles] = useState(3);
+            
+            const [selectedTile, setSelectedTile] = useState(null);
+            const [matchedTiles, setMatchedTiles] = useState([]); 
+            const [hintActiveTiles, setHintActiveTiles] = useState([]); 
+            const [activePath, setActivePath] = useState(null); 
+
+            // Multiplayer States
+            const [gameState, setGameState] = useState('LOBBY_MAIN'); // LOBBY_MAIN, LOBBY_CREATE, LOBBY_JOIN, WAITING, PLAYING, WON, GAMEOVER
+            const [multiMode, setMultiMode] = useState('SINGLE'); // SINGLE, VERSUS, COOP
+            const [roomId, setRoomId] = useState('');
+            const [joinInput, setJoinInput] = useState('');
+            const [isHost, setIsHost] = useState(true);
+            const [opponentScore, setOpponentScore] = useState(0);
+
+            const isAnimating = useRef(false);
+            const channelRef = useRef(null);
+            const clientId = useRef(Math.random().toString(36).substr(2, 6)); // ID Unik pemain ini
+            const boardRef = useRef(board); 
+            
+            useEffect(() => { boardRef.current = board; }, [board]);
+
+            // GENERATE BOARD ACAK (Bisa di-passing seed/board dari Host)
+            const generateBoard = useCallback(() => {
+                const newBoard = Array.from({ length: ROWS + 2 }, () => Array(COLS + 2).fill(0));
+                let shuffledPool = [...ALL_CUTE_POKEMON].sort(() => Math.random() - 0.5);
+                let selectedIds = shuffledPool.slice(0, (ROWS * COLS) / 4); 
+
+                let tiles = [];
+                selectedIds.forEach(id => { tiles.push(id, id, id, id); });
+                tiles.sort(() => Math.random() - 0.5);
+
+                let idx = 0;
+                for (let r = 1; r <= ROWS; r++) {
+                    for (let c = 1; c <= COLS; c++) { newBoard[r][c] = tiles[idx++]; }
+                }
+                
+                let attempts = 0;
+                while (!findHint(newBoard) && attempts < 10) {
+                    tiles.sort(() => Math.random() - 0.5);
+                    idx = 0;
+                    for (let r = 1; r <= ROWS; r++) {
+                        for (let c = 1; c <= COLS; c++) { newBoard[r][c] = tiles[idx++]; }
+                    }
+                    attempts++;
+                }
+                return newBoard;
+            }, []);
+
+            // MULAI GAME
+            const startGame = (startLevel = 1, providedBoard = null) => {
+                const b = providedBoard || generateBoard();
+                setBoard(b);
+                setLevel(startLevel);
+                if (startLevel === 1) {
+                    setScore(0); setHp(3); setHints(3); setShuffles(3); setOpponentScore(0);
+                }
+                setProgress(100);
+                setGameState('PLAYING');
+                setSelectedTile(null);
+                setMatchedTiles([]);
+                setActivePath(null);
+                setHintActiveTiles([]);
+                isAnimating.current = false;
+
+                // Sync board baru ke Guest jika kita Host
+                if (isHost && multiMode !== 'SINGLE' && startLevel > 1) {
+                    channelRef.current?.publish('action', { type: 'NEXT_LEVEL', board: b, level: startLevel });
+                }
+            };
+
+            // SETUP ABLY MULTIPLAYER
+            const setupMultiplayer = (rId, mode, amIHost) => {
+                setRoomId(rId);
+                setMultiMode(mode);
+                setIsHost(amIHost);
+                
+                const ch = ably.channels.get(`pkmn-room-${rId}`);
+                channelRef.current = ch;
+
+                ch.subscribe('action', (msg) => {
+                    const data = msg.data;
+                    
+                    // Host Menerima Permintaan Join dari Guest
+                    if (data.type === 'GUEST_JOIN' && amIHost) {
+                        const newB = generateBoard();
+                        ch.publish('action', { type: 'START_GAME', board: newB, mode: mode });
+                        startGame(1, newB); // Mulai game Host
+                    }
+                    
+                    // Guest Menerima Papan & Start dari Host
+                    if (data.type === 'START_GAME' && !amIHost) {
+                        setMultiMode(data.mode);
+                        startGame(1, data.board); // Mulai game Guest dengan board Host
+                    }
+
+                    // Lawan Mencetak Skor (Versus)
+                    if (data.type === 'VS_SCORE' && data.clientId !== clientId.current) {
+                        setOpponentScore(data.score);
+                    }
+
+                    // Teman Mencocokkan Kartu (Co-op)
+                    if (data.type === 'COOP_MATCH' && data.clientId !== clientId.current) {
+                        handleRemoteMatch(data.r1, data.c1, data.r2, data.c2, data.path);
+                    }
+
+                    // Pindah Level (Dikendalikan Host)
+                    if (data.type === 'NEXT_LEVEL' && !amIHost) {
+                        startGame(data.level, data.board);
+                    }
+                    
+                    // Sinkronisasi Shuffle (Jika host shuffle, guest juga ikut)
+                    if (data.type === 'SYNC_SHUFFLE' && !amIHost) {
+                        setBoard(data.board);
+                    }
+                });
+
+                if (amIHost) {
+                    setGameState('WAITING');
+                } else {
+                    ch.publish('action', { type: 'GUEST_JOIN' });
+                    setGameState('WAITING'); // Menunggu respon Host
+                }
+            };
+
+            // SISTEM WAKTU DINAMIS
+            useEffect(() => {
+                if (gameState !== 'PLAYING') return;
+                const speed = 0.10 + (level * 0.05); 
+                const timer = setInterval(() => {
+                    setProgress(prev => {
+                        if (prev <= 0) { clearInterval(timer); handleTimeout(); return 0; }
+                        return prev - speed; 
+                    });
+                }, 200);
+                return () => clearInterval(timer);
+            }, [gameState, level]);
+
+            const handleTimeout = () => {
+                if (hp > 1) {
+                    setHp(h => h - 1);
+                    // Jika co-op, biarkan host yang merestart
+                    if (multiMode === 'COOP' && !isHost) return; 
+                    
+                    const newB = generateBoard();
+                    startGame(level, newB); 
+                } else {
+                    setGameState('GAMEOVER');
+                }
+            };
+
+            const performShuffle = (currentBoard) => {
+                let tiles = []; let pos = [];
+                for (let r = 1; r <= ROWS; r++) {
+                    for (let c = 1; c <= COLS; c++) {
+                        if (currentBoard[r][c] !== 0) { tiles.push(currentBoard[r][c]); pos.push({r, c}); }
+                    }
+                }
+                if (tiles.length === 0) return currentBoard;
+                let newB = [...currentBoard.map(row => [...row])];
+                let valid = false; let attempts = 0;
+                while (!valid && attempts < 20) {
+                    tiles.sort(() => Math.random() - 0.5);
+                    for (let i = 0; i < pos.length; i++) { newB[pos[i].r][pos[i].c] = tiles[i]; }
+                    if (findHint(newB)) valid = true;
+                    attempts++;
+                }
+                return newB;
+            };
+
+            const handleShuffleClick = () => {
+                // Di Co-op, hanya host yang bisa shuffle gratis atau manual agar sinkron
+                if (shuffles > 0 && gameState === 'PLAYING' && !isAnimating.current) {
+                    setShuffles(s => s - 1);
+                    const newB = performShuffle(board);
+                    setBoard(newB);
+                    setSelectedTile(null);
+                    if (multiMode === 'COOP' && isHost) {
+                        channelRef.current?.publish('action', { type: 'SYNC_SHUFFLE', board: newB });
+                    }
+                }
+            };
+
+            const handleHintClick = () => {
+                if (hints > 0 && gameState === 'PLAYING' && !isAnimating.current) {
+                    const hintData = findHint(board);
+                    if (hintData) {
+                        setHints(h => h - 1);
+                        setHintActiveTiles([{r: hintData.p1.r, c: hintData.p1.c}, {r: hintData.p2.r, c: hintData.p2.c}]);
+                        setTimeout(() => { if(!isAnimating.current) setHintActiveTiles([]); }, 1200); 
+                    }
+                }
+            };
+
+            const checkLevelComplete = (b) => {
+                let empty = true;
+                for (let r = 1; r <= ROWS; r++) {
+                    for (let c = 1; c <= COLS; c++) { if (b[r][c] !== 0) empty = false; }
+                }
+                if (empty) {
+                    setGameState('WON');
+                    setTimeout(() => {
+                        if (multiMode === 'COOP' && !isHost) return; // Hanya host ganti level di co-op
+                        const newB = generateBoard();
+                        startGame(level + 1, newB);
+                    }, 2000);
+                    return true;
+                }
+                if (!findHint(b)) {
+                    if (multiMode === 'COOP' && !isHost) return; 
+                    const newB = performShuffle(b);
+                    setBoard(newB);
+                    if (multiMode === 'COOP' && isHost) {
+                        channelRef.current?.publish('action', { type: 'SYNC_SHUFFLE', board: newB });
+                    }
+                }
+                return false;
+            };
+
+            // HANDLE KONEK REMOTE DARI TEMAN (CO-OP)
+            const handleRemoteMatch = useCallback((r1, c1, r2, c2, path) => {
+                isAnimating.current = true;
+                setHintActiveTiles([]); 
+                setActivePath(path);
+                
+                // Ambil ID langsung dari referensi board terkini
+                const b = boardRef.current;
+                if (b[r1][c1] === 0 || b[r2][c2] === 0) { isAnimating.current = false; return; } // Sudah dimatch
+
+                setMatchedTiles([ {r: r1, c: c1, id: b[r1][c1]}, {r: r2, c: c2, id: b[r2][c2]} ]);
+
+                setTimeout(() => {
+                    setBoard(prev => {
+                        const newBoard = [...prev.map(row => [...row])];
+                        newBoard[r1][c1] = 0; newBoard[r2][c2] = 0;
+                        checkLevelComplete(newBoard);
+                        return newBoard;
+                    });
+                    
+                    setSelectedTile(null); setActivePath(null); setMatchedTiles([]); 
+                    setScore(s => s + 10);
+                    setProgress(p => Math.min(100, p + 4)); 
+                    isAnimating.current = false;
+                }, 350);
+            }, []);
+
+            // HANDLE KLIK LOKAL
+            const handleTileClick = (r, c) => {
+                if (gameState !== 'PLAYING' || isAnimating.current || board[r][c] === 0) return;
+
+                if (selectedTile && selectedTile.r === r && selectedTile.c === c) { setSelectedTile(null); return; }
+                if (!selectedTile) { setSelectedTile({r, c}); return; }
+
+                const path = getPath(board, selectedTile.r, selectedTile.c, r, c);
+                
+                if (path) {
+                    isAnimating.current = true;
+                    setHintActiveTiles([]); 
+                    setActivePath(path);
+                    
+                    const r1 = selectedTile.r; const c1 = selectedTile.c;
+                    const id1 = board[r1][c1]; const id2 = board[r][c];
+                    
+                    setMatchedTiles([ {r: r1, c: c1, id: id1}, {r, c, id: id2} ]);
+
+                    // KIRIM KE ABLY MULTIPLAYER JIKA AKTIF
+                    if (multiMode === 'COOP') {
+                        channelRef.current?.publish('action', { type: 'COOP_MATCH', clientId: clientId.current, r1, c1, r2: r, c2: c, path });
+                    }
+                    if (multiMode === 'VERSUS') {
+                        channelRef.current?.publish('action', { type: 'VS_SCORE', clientId: clientId.current, score: score + 10 });
+                    }
+
+                    setTimeout(() => {
+                        const newBoard = [...board.map(row => [...row])];
+                        newBoard[r1][c1] = 0; newBoard[r][c] = 0;
+                        setBoard(newBoard);
+                        
+                        setSelectedTile(null); setActivePath(null); setMatchedTiles([]); 
+                        setScore(s => s + 10); setProgress(p => Math.min(100, p + 4)); 
+                        isAnimating.current = false;
+                        checkLevelComplete(newBoard);
+                    }, 350); // Waktu 350ms adalah sinkron mutlak untuk memudar
+
+                } else {
+                    setSelectedTile({r, c});
+                }
+            };
+
+            return (
+                <div className="w-full h-[100dvh] bg-pink-100 flex items-center justify-center p-1 sm:p-2">
+                    <div className="w-full max-w-[480px] h-full flex flex-col bg-white border-[3px] border-pink-300 rounded-xl shadow-lg overflow-hidden relative">
+                        
+                        {/* 1. KEPALA (MENU ATAS) */}
+                        <div className="w-full bg-pink-50 p-2 sm:p-3 flex flex-col gap-1 sm:gap-2 shrink-0 border-b-[2px] border-pink-200 z-50 relative">
+                            
+                            {/* MULTIPLAYER INDICATOR BAR */}
+                            {multiMode !== 'SINGLE' && (
+                                <div className="w-full bg-white/80 rounded-full px-3 py-1 flex justify-between items-center text-xs font-bold shadow-sm border border-pink-100 mb-1">
+                                    <span className="text-purple-500">
+                                        {multiMode === 'COOP' ? '🤝 Mode Co-op Bersama' : '⚔️ Mode Versus Adu Skor'}
+                                    </span>
+                                    {multiMode === 'VERSUS' && (
+                                        <span className="text-red-400 bg-red-50 px-2 rounded-full">Musuh: {opponentScore}</span>
+                                    )}
+                                </div>
+                            )}
+
+                            <div className="flex items-center justify-between gap-1 sm:gap-2">
+                                <div className="flex items-center bg-white rounded-full px-2 py-0.5 sm:py-1 shadow-sm border border-pink-200">
+                                    <IconHeart />
+                                    <span className="ml-1 text-xs sm:text-sm font-bold text-pink-500">{hp}</span>
+                                </div>
+                                <div className="text-lg sm:text-xl font-bold text-pink-500 flex items-center gap-1">
+                                    <IconStar /> Level {level}
+                                </div>
+                                <div className="flex-1 max-w-[90px] sm:max-w-[100px] bg-white rounded-full h-3 sm:h-4 p-[2px] shadow-inner border border-pink-200 relative overflow-hidden">
+                                    <div className="h-full rounded-full transition-all duration-200 ease-linear"
+                                        style={{
+                                            width: `${progress}%`,
+                                            backgroundImage: progress > 50 ? 'linear-gradient(to right, #a78bfa, #f472b6)' : progress > 25 ? 'linear-gradient(to right, #fde047, #f59e0b)' : 'linear-gradient(to right, #fca5a5, #ef4444)' 
+                                        }}
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="flex justify-between items-center mt-1">
+                                <div className="text-xs sm:text-sm font-bold bg-white px-3 py-1 sm:px-4 sm:py-1.5 rounded-full text-pink-500 border border-pink-200 tracking-wide shadow-sm">
+                                    Skor: {score}
+                                </div>
+                                <div className="flex gap-1.5 sm:gap-2">
+                                    <button onClick={handleHintClick} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center relative shadow-sm"><IconSearch /><span className="absolute -top-1 -right-1 bg-pink-500 text-white text-[9px] sm:text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{hints}</span></button>
+                                    <button onClick={handleShuffleClick} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center relative shadow-sm"><IconRefresh /><span className="absolute -top-1 -right-1 bg-purple-500 text-white text-[9px] sm:text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{shuffles}</span></button>
+                                    <button onClick={() => setGameState('PAUSED')} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center text-pink-500 shadow-sm"><IconPause /></button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 2. BADAN (AREA GRID) */}
+                        <div className="flex-1 w-full relative bg-white p-[1px] sm:p-[2px]">
+                            {board.length > 0 && (
+                                <>
+                                    {/* LAYER SVG PENGHUBUNG (Z-10) -> Di Bawah Kartu, Animasi Memudar 350ms Sempurna */}
+                                    <svg viewBox={`0 0 ${COLS + 2} ${ROWS + 2}`} preserveAspectRatio="none" className="absolute inset-[1px] sm:inset-[2px] w-[calc(100%-2px)] sm:w-[calc(100%-4px)] h-[calc(100%-2px)] sm:h-[calc(100%-4px)] pointer-events-none" style={{ zIndex: 10 }}>
+                                        {activePath && (
+                                            <g>
+                                                <path
+                                                    d={`M ${activePath.map(p => `${p.c + 0.5} ${p.r + 0.5}`).join(' L ')}`}
+                                                    fill="none" stroke="#f472b6" strokeWidth="0.18" strokeLinecap="round" strokeLinejoin="round"
+                                                    className="path-line-outer drop-shadow-sm"
+                                                />
+                                                <path
+                                                    d={`M ${activePath.map(p => `${p.c + 0.5} ${p.r + 0.5}`).join(' L ')}`}
+                                                    fill="none" stroke="#ffffff" strokeWidth="0.07" strokeLinecap="round" strokeLinejoin="round"
+                                                    className="path-line-inner"
+                                                />
+                                            </g>
+                                        )}
+                                    </svg>
+
+                                    {/* LAYER KARTU POKEMON (Z-20) */}
+                                    <div className="absolute inset-[1px] sm:inset-[2px] grid gap-[1.5px] sm:gap-[2px]" style={{ zIndex: 20, gridTemplateColumns: `repeat(${COLS + 2}, 1fr)`, gridTemplateRows: `repeat(${ROWS + 2}, 1fr)` }}>
+                                        {board.map((row, r) => row.map((cellId, c) => {
+                                            if (r === 0 || r === ROWS + 1 || c === 0 || c === COLS + 1) return <div key={`${r}-${c}`} className="w-full h-full pointer-events-none"></div>;
+
+                                            const isSelected = selectedTile && selectedTile.r === r && selectedTile.c === c;
+                                            const matchingTile = matchedTiles.find(m => m.r === r && m.c === c);
+                                            const isMatching = !!matchingTile;
+                                            const isHinting = hintActiveTiles.find(h => h.r === r && h.c === c);
+                                            const isEmpty = cellId === 0 && !isMatching;
+
+                                            return (
+                                                <div key={`${r}-${c}`} className="relative w-full h-full p-[0.5px]">
+                                                    {!isEmpty && (
+                                                        <button 
+                                                            className={`cute-tile ${isSelected ? 'selected' : ''} ${isMatching ? 'matched' : ''} ${isHinting ? 'hint-glow' : ''}`}
+                                                            style={{ WebkitTapHighlightColor: 'transparent' }}
+                                                            onClick={() => handleTileClick(r, c)}
+                                                        >
+                                                            <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${isMatching ? matchingTile.id : cellId}.png`} alt="pokemon" className="w-[95%] h-[95%] object-contain pointer-events-none drop-shadow-sm"/>
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            );
+                                        }))}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        {/* LOBBY & OVERLAYS */}
+                        {gameState === 'LOBBY_MAIN' && (
+                            <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
+                                <h1 className="text-4xl font-black text-pink-500 mb-1 drop-shadow-sm text-center">POKÉMON<br/>CONNECT</h1>
+                                <h2 className="text-lg font-bold text-purple-400 mb-10">Multiplayer Edition ✧</h2>
+                                
+                                <div className="flex flex-col gap-4 w-3/4 max-w-[250px]">
+                                    <button onClick={() => { setMultiMode('SINGLE'); startGame(1); }} className="cute-btn-text py-3 text-lg font-bold">Main Sendiri</button>
+                                    <button onClick={() => setGameState('LOBBY_CREATE')} className="cute-btn-text py-3 text-lg font-bold bg-gradient-to-r from-purple-400 to-indigo-400">Buat Room</button>
+                                    <button onClick={() => setGameState('LOBBY_JOIN')} className="cute-btn-text py-3 text-lg font-bold bg-gradient-to-r from-teal-400 to-emerald-400">Masuk Room</button>
+                                </div>
+                            </div>
+                        )}
+
+                        {gameState === 'LOBBY_CREATE' && (
+                            <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
+                                <h2 className="text-2xl font-black text-purple-500 mb-8">Pilih Mode Multiplayer</h2>
+                                <div className="flex flex-col gap-4 w-3/4 max-w-[250px]">
+                                    <button onClick={() => setupMultiplayer(Math.random().toString(36).substr(2, 4).toUpperCase(), 'COOP', true)} className="cute-btn-text py-3 text-lg font-bold">🤝 Mode Co-op</button>
+                                    <button onClick={() => setupMultiplayer(Math.random().toString(36).substr(2, 4).toUpperCase(), 'VERSUS', true)} className="cute-btn-text py-3 text-lg font-bold bg-gradient-to-r from-red-400 to-pink-500">⚔️ Mode Versus</button>
+                                    <button onClick={() => setGameState('LOBBY_MAIN')} className="text-gray-400 font-bold underline mt-4">Kembali</button>
+                                </div>
+                            </div>
+                        )}
+
+                        {gameState === 'LOBBY_JOIN' && (
+                            <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
+                                <h2 className="text-2xl font-black text-teal-500 mb-6">Masuk Room Teman</h2>
+                                <input 
+                                    type="text" placeholder="Masukkan 4 Digit Kode" maxLength={4}
+                                    className="border-4 border-teal-200 rounded-xl px-4 py-3 text-center text-xl font-bold text-gray-700 w-3/4 max-w-[250px] mb-4 uppercase"
+                                    value={joinInput} onChange={e => setJoinInput(e.target.value.toUpperCase())}
+                                />
+                                <button 
+                                    onClick={() => { if(joinInput.length > 0) setupMultiplayer(joinInput, 'COOP', false); }} 
+                                    className="cute-btn-text py-3 w-3/4 max-w-[250px] text-lg font-bold bg-gradient-to-r from-teal-400 to-emerald-400"
+                                >Gabung!</button>
+                                <button onClick={() => setGameState('LOBBY_MAIN')} className="text-gray-400 font-bold underline mt-4">Kembali</button>
+                            </div>
+                        )}
+
+                        {gameState === 'WAITING' && (
+                            <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
+                                <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-purple-400 mb-6"></div>
+                                <h2 className="text-2xl font-black text-purple-500 mb-2">Menunggu...</h2>
+                                {isHost ? (
+                                    <>
+                                        <p className="text-gray-500 font-bold">Suruh temanmu masuk dengan kode:</p>
+                                        <div className="text-4xl font-black text-pink-500 my-4 bg-pink-100 px-6 py-2 rounded-2xl tracking-widest border-2 border-pink-300 shadow-sm">{roomId}</div>
+                                    </>
+                                ) : (
+                                    <p className="text-gray-500 font-bold">Sedang sinkronisasi dengan Host...</p>
+                                )}
+                                <button onClick={() => { channelRef.current?.unsubscribe(); setGameState('LOBBY_MAIN'); }} className="text-gray-400 font-bold underline mt-8">Batal</button>
+                            </div>
+                        )}
+
+                        {gameState === 'PAUSED' && (
+                            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
+                                <h2 className="text-3xl font-black text-purple-500 mb-6">DIJEDA</h2>
+                                <button onClick={() => setGameState('PLAYING')} className="cute-btn-text px-8 py-3 text-lg font-bold mb-4">LANJUTKAN</button>
+                                <button onClick={() => setGameState('LOBBY_MAIN')} className="text-gray-400 font-bold underline">Keluar ke Menu</button>
+                            </div>
+                        )}
+
+                        {gameState === 'GAMEOVER' && (
+                            <div className="absolute inset-0 bg-pink-50/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
+                                <h2 className="text-3xl font-black text-red-400 mb-2">WAKTU HABIS!</h2>
+                                <p className="text-lg text-gray-500 font-bold mb-1">Skormu: <span className="text-pink-500 text-3xl">{score}</span></p>
+                                {multiMode === 'VERSUS' && <p className="text-lg text-gray-500 font-bold mb-6">Skor Lawan: <span className="text-red-400 text-3xl">{opponentScore}</span></p>}
+                                <button onClick={() => startGame(1)} className="cute-btn-text bg-gradient-to-r from-red-400 to-pink-500 px-8 py-3 text-lg font-bold mt-4">MAIN LAGI</button>
+                                <button onClick={() => setGameState('LOBBY_MAIN')} className="text-gray-400 font-bold underline mt-6">Keluar</button>
+                            </div>
+                        )}
+
+                        {gameState === 'WON' && (
+                            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
+                                <h2 className="text-3xl font-black text-green-400 mb-2">LEVEL {level} SELESAI!</h2>
+                                <p className="text-lg text-gray-500 mb-6 font-bold">Lanjut level {level + 1}...</p>
+                                {multiMode === 'COOP' && !isHost && <p className="text-sm text-pink-400">Menunggu Host...</p>}
+                                <div className="animate-spin rounded-full h-10 w-10 border-t-4 border-b-4 border-pink-400 mt-4"></div>
+                            </div>
+                        )}
+                        
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
+
