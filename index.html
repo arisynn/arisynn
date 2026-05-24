@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="id">
 <head>
@@ -78,6 +77,13 @@
             100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(251, 191, 36, 0); }
         }
         .hint-glow { animation: pulseHint 1s infinite; z-index: 25; }
+
+        @keyframes countdownPop {
+            0%   { transform: scale(1.6); opacity: 0; }
+            30%  { transform: scale(0.9); opacity: 1; }
+            60%  { transform: scale(1.05); }
+            100% { transform: scale(1); opacity: 1; }
+        }
     </style>
 </head>
 <body>
@@ -87,7 +93,8 @@
         const { useState, useEffect, useCallback, useRef } = React;
 
         const ABLY_KEY = '4opURQ.FVPiqg:z5W8zQxWoBNlXmlAXvOv4Bz1bmn_ISnFucJGpjFijS8';
-        const ably = new Ably.Realtime({ key: ABLY_KEY, echoMessages: false }); 
+        const globalClientId = Math.random().toString(36).substr(2, 8);
+        const ably = new Ably.Realtime({ key: ABLY_KEY, clientId: globalClientId, echoMessages: false }); 
 
         const ROWS = 16; 
         const COLS = 10;
@@ -188,28 +195,22 @@
             const [multiMode, setMultiMode] = useState('SINGLE'); 
             const [isHost, setIsHost] = useState(true);
             const [opponentScore, setOpponentScore] = useState(0);
-            const [multiplayerReady, setMultiplayerReady] = useState({ host: false, guest: false });
-
             // Statistik Performa (CO-OP)
             const [coopSummary, setCoopSummary] = useState({ myConnects: 0, allyConnects: 0, myTotalTime: 0, allyTotalTime: 0 });
             const statsRef = useRef({ myConnects: 0, allyConnects: 0, myTotalTime: 0, allyTotalTime: 0, lastActionTime: 0 });
 
+            // Countdown state
+            const [countdown, setCountdown] = useState(null); // null | 3 | 2 | 1 | 'GO!'
+
             const isAnimating = useRef(false);
             const channelRef = useRef(null);
             const matchmakingChannelRef = useRef(null);
-            const boardRef = useRef(board); 
+            const boardRef = useRef(board);
+            // Untuk sinkronisasi loading multiplayer (diakses dari dalam listener closure)
+            const hostLoadedCountRef = useRef(0);  // jumlah PLAYER_LOADED dari lawan yang diterima
+            const hostSelfLoadedRef = useRef(false); // apakah host sendiri sudah selesai loading 
             
             useEffect(() => { boardRef.current = board; }, [board]);
-
-            useEffect(() => {
-                if (isHost && multiMode !== 'SINGLE' && gameState === 'LOADING_BOARD') {
-                    if (multiplayerReady.host && multiplayerReady.guest) {
-                        channelRef.current?.publish('action', { type: 'START_PLAYING' });
-                        finalizeStart();
-                        setMultiplayerReady({host: false, guest: false});
-                    }
-                }
-            }, [multiplayerReady, isHost, multiMode, gameState]);
 
             const handleLogin = () => {
                 if(playerName.trim()) {
@@ -292,89 +293,200 @@
                 await preloadBoardImages(b);
 
                 if (multiMode === 'SINGLE') {
-                    finalizeStart();
+                    // Single player: langsung countdown lalu main
+                    startCountdown(() => finalizeStart());
                 } else {
+                    // Multiplayer: broadcast bahwa kita sudah selesai loading
+                    channelRef.current?.publish('action', { type: 'PLAYER_LOADED' });
+
                     if (isHost) {
-                        setMultiplayerReady(prev => ({...prev, host: true}));
-                    } else {
-                        channelRef.current?.publish('action', { type: 'GUEST_READY' });
-                        setGameState('WAITING_HOST_START');
+                        // Host track bahwa dirinya sendiri sudah selesai loading
+                        // Kalau lawan sudah kirim PLAYER_LOADED duluan, langsung broadcast BOTH_LOADED
+                        hostSelfLoadedRef.current = true;
+                        if (hostLoadedCountRef.current >= 1) {
+                            hostLoadedCountRef.current = 0;
+                            hostSelfLoadedRef.current = false;
+                            channelRef.current?.publish('action', { type: 'BOTH_LOADED' });
+                        }
                     }
+
+                    setGameState('WAITING_BOTH_LOADED');
                 }
             };
 
-            const finalizeStart = () => {
+            // Countdown 3-2-1-GO! lalu panggil callback
+            const startCountdown = (onDone) => {
                 setProgress(100);
-                setGameState('PLAYING');
+                setGameState('COUNTDOWN');
+                setCountdown(3);
+                let count = 3;
+                const tick = setInterval(() => {
+                    count--;
+                    if (count > 0) {
+                        setCountdown(count);
+                    } else if (count === 0) {
+                        setCountdown('GO!');
+                    } else {
+                        clearInterval(tick);
+                        setCountdown(null);
+                        onDone();
+                    }
+                }, 1000);
+            };
+
+            const finalizeStart = () => {
                 setSelectedTile(null);
                 setMatchedTiles([]);
                 setActivePath(null);
                 setHintActiveTiles([]);
                 isAnimating.current = false;
+                setGameState('PLAYING');
                 
                 // Reset statistik untuk level ini
                 statsRef.current = { myConnects: 0, allyConnects: 0, myTotalTime: 0, allyTotalTime: 0, lastActionTime: Date.now() };
             };
 
-            // AUTO MATCHMAKING LOBBY
+            // ============================================================
+            // AUTO MATCHMAKING — FIXED ARCHITECTURE
+            // Fix #1: attach() dulu sebelum presence.get() → hindari race condition
+            // Fix #2: host subscribe presence 'enter' → bukan polling
+            // Fix #3: guest attach ke room channel dulu sebelum kirim GUEST_JOIN
+            // Fix #4: cleanup channel lama agar tidak double-subscribe
+            // ============================================================
+            const cleanupChannels = () => {
+                if (matchmakingChannelRef.current) {
+                    try { matchmakingChannelRef.current.presence.leave(); } catch(e) {}
+                    try { matchmakingChannelRef.current.unsubscribe(); } catch(e) {}
+                    try { matchmakingChannelRef.current.presence.unsubscribe(); } catch(e) {}
+                    matchmakingChannelRef.current = null;
+                }
+                if (channelRef.current) {
+                    try { channelRef.current.unsubscribe(); } catch(e) {}
+                    channelRef.current = null;
+                }
+                hostLoadedCountRef.current = 0;
+                hostSelfLoadedRef.current = false;
+            };
+
             const startMatchmaking = (mode) => {
+                cleanupChannels();
                 setMultiMode(mode);
                 setGameState('MATCHMAKING');
-                
-                const lobbyChannel = ably.channels.get(`pkmn-lobby-${mode}`);
+
+                const lobbyChannel = ably.channels.get(`pkmn-lobby-${mode}-v2`);
                 matchmakingChannelRef.current = lobbyChannel;
 
-                lobbyChannel.presence.get((err, members) => {
-                    if (err || members.length === 0) {
-                        setIsHost(true);
-                        const newRoomId = Math.random().toString(36).substr(2, 8);
-                        
-                        const privateChannel = ably.channels.get(`pkmn-room-${newRoomId}`);
-                        channelRef.current = privateChannel;
-                        setupRoomListeners(privateChannel, true, mode);
-
-                        lobbyChannel.presence.enter({ roomId: newRoomId, hostName: playerName });
-                    } else {
-                        setIsHost(false);
-                        const targetHost = members[0]; 
-                        const targetRoom = targetHost.data.roomId;
-                        setOpponentName(targetHost.data.hostName);
-
-                        const privateChannel = ably.channels.get(`pkmn-room-${targetRoom}`);
-                        channelRef.current = privateChannel;
-                        setupRoomListeners(privateChannel, false, mode);
-                        
-                        privateChannel.publish('action', { type: 'GUEST_JOIN', guestName: playerName });
-                        lobbyChannel.presence.leave();
+                // WAJIB: attach dulu, baru akses presence — ini root cause bug lama
+                lobbyChannel.attach((attachErr) => {
+                    if (attachErr) {
+                        console.error('Lobby attach error:', attachErr);
+                        setGameState('LOBBY_MAIN');
+                        return;
                     }
+
+                    lobbyChannel.presence.get((err, members) => {
+                        // Filter hanya member yang punya data roomId valid
+                        const waitingHosts = (members || []).filter(m => m.data && m.data.roomId && m.clientId !== globalClientId);
+
+                        if (err || waitingHosts.length === 0) {
+                            // === JADI HOST ===
+                            setIsHost(true);
+                            const newRoomId = Math.random().toString(36).substr(2, 8);
+
+                            const privateChannel = ably.channels.get(`pkmn-room-${newRoomId}`);
+                            channelRef.current = privateChannel;
+
+                            // Attach room channel dulu, baru enter lobby
+                            privateChannel.attach((roomAttachErr) => {
+                                if (roomAttachErr) { setGameState('LOBBY_MAIN'); return; }
+
+                                // Subscribe listener setelah channel siap
+                                setupRoomListeners(privateChannel, true, mode);
+
+                                // Masuk presence lobby sebagai host — visible ke guest
+                                lobbyChannel.presence.enter({ roomId: newRoomId, hostName: playerName }, (presErr) => {
+                                    if (presErr) console.error('Presence enter error:', presErr);
+                                });
+
+                                // Tunggu guest join via presence event (bukan polling)
+                                lobbyChannel.presence.subscribe('enter', (member) => {
+                                    if (member.clientId === globalClientId) return; // abaikan echo diri sendiri
+                                    // Ada guest masuk lobby — artinya guest sedang kirim GUEST_JOIN ke room channel
+                                    // Tidak perlu tindakan di sini, sudah ditangani di setupRoomListeners
+                                });
+                            });
+
+                        } else {
+                            // === JADI GUEST ===
+                            setIsHost(false);
+                            const targetHost = waitingHosts[0];
+                            const targetRoom = targetHost.data.roomId;
+                            setOpponentName(targetHost.data.hostName);
+
+                            const privateChannel = ably.channels.get(`pkmn-room-${targetRoom}`);
+                            channelRef.current = privateChannel;
+
+                            // Fix #3: attach room channel dulu sebelum publish GUEST_JOIN
+                            // agar host sudah pasti bisa terima pesan
+                            privateChannel.attach((roomAttachErr) => {
+                                if (roomAttachErr) { setGameState('LOBBY_MAIN'); return; }
+
+                                setupRoomListeners(privateChannel, false, mode);
+
+                                // Sekarang aman untuk publish — host sudah subscribe
+                                privateChannel.publish('action', { type: 'GUEST_JOIN', guestName: playerName });
+
+                                // Keluar dari lobby agar tidak diambil guest lain
+                                lobbyChannel.presence.leave();
+                            });
+                        }
+                    });
                 });
             };
 
             const setupRoomListeners = (ch, amIHost, mode) => {
+                // Unsubscribe dulu jaga-jaga ada listener lama
+                ch.unsubscribe('action');
+
                 ch.subscribe('action', (msg) => {
                     const data = msg.data;
-                    
+
                     if (data.type === 'GUEST_JOIN' && amIHost) {
                         setOpponentName(data.guestName);
-                        matchmakingChannelRef.current?.presence.leave(); 
-                        
+                        // Keluar dari lobby agar tidak diambil guest lain
+                        try { matchmakingChannelRef.current?.presence.leave(); } catch(e) {}
+
                         const newB = generateBoard();
                         ch.publish('action', { type: 'START_GAME_SYNC', board: newB, mode: mode, hostName: playerName });
-                        prepareLevel(1, newB); 
+                        prepareLevel(1, newB);
                     }
-                    
+
                     if (data.type === 'START_GAME_SYNC' && !amIHost) {
                         setMultiMode(data.mode);
                         setOpponentName(data.hostName);
-                        prepareLevel(1, data.board); 
+                        prepareLevel(1, data.board);
                     }
 
-                    if (data.type === 'GUEST_READY' && amIHost) {
-                        setMultiplayerReady(prev => ({...prev, guest: true}));
+                    // ---- SYNCHRONIZED LOADING SYSTEM ----
+                    // Keduanya kirim PLAYER_LOADED setelah selesai preload gambar.
+                    // Host yang jadi "gate": kalau sudah dapat 2 sinyal, broadcast BOTH_LOADED
+                    // yang memicu countdown di kedua sisi secara bersamaan.
+                    if (data.type === 'PLAYER_LOADED') {
+                        if (amIHost) {
+                            // Host tandai bahwa lawan sudah loaded
+                            hostLoadedCountRef.current = (hostLoadedCountRef.current || 0) + 1;
+                            // Cek apakah host sendiri juga sudah di state WAITING_BOTH_LOADED
+                            // (artinya host juga sudah selesai loading)
+                            if (hostLoadedCountRef.current >= 1 && hostSelfLoadedRef.current) {
+                                hostLoadedCountRef.current = 0;
+                                hostSelfLoadedRef.current = false;
+                                ch.publish('action', { type: 'BOTH_LOADED' });
+                            }
+                        }
                     }
 
-                    if (data.type === 'START_PLAYING' && !amIHost) {
-                        finalizeStart(); 
+                    if (data.type === 'BOTH_LOADED') {
+                        startCountdown(() => finalizeStart());
                     }
 
                     if (data.type === 'VS_SCORE') setOpponentScore(data.score);
@@ -383,14 +495,14 @@
                     if (data.type === 'NEXT_LEVEL_SYNC' && !amIHost) {
                         prepareLevel(data.level, data.board);
                     }
-                    
+
                     if (data.type === 'SYNC_SHUFFLE' && !amIHost) setBoard(data.board);
                 });
             };
 
             const cancelMatchmaking = () => {
-                matchmakingChannelRef.current?.presence.leave();
-                channelRef.current?.unsubscribe();
+                cleanupChannels();
+                setMultiMode('SINGLE');
                 setGameState('LOBBY_MAIN');
             };
 
@@ -626,7 +738,7 @@
                     </div>
                     
                     {isGameOver ? (
-                        <button onClick={() => { channelRef.current?.unsubscribe(); setGameState('LOBBY_MAIN'); }} className="cute-btn-text w-full py-3 text-lg font-bold bg-gradient-to-r from-red-400 to-pink-500">Keluar ke Menu</button>
+                        <button onClick={() => { cleanupChannels(); setMultiMode('SINGLE'); setGameState('LOBBY_MAIN'); }} className="cute-btn-text w-full py-3 text-lg font-bold bg-gradient-to-r from-red-400 to-pink-500">Keluar ke Menu</button>
                     ) : isHost ? (
                         <button onClick={() => {
                             const newB = generateBoard();
@@ -778,11 +890,31 @@
                             </div>
                         )}
 
-                        {gameState === 'WAITING_HOST_START' && (
+                        {gameState === 'WAITING_BOTH_LOADED' && (
                             <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
                                 <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-teal-400 mb-6"></div>
-                                <h2 className="text-2xl font-black text-teal-500 mb-2">Menunggu Pemain...</h2>
-                                <p className="text-gray-500 font-bold text-center px-6">Sinkronisasi gambar selesai, menunggu pemain lain siap.</p>
+                                <h2 className="text-2xl font-black text-teal-500 mb-2">Menunggu Pemain Lain...</h2>
+                                <p className="text-gray-500 font-bold text-center px-6">Pokémon sudah siap! Menunggu partner selesai loading...</p>
+                            </div>
+                        )}
+
+                        {gameState === 'COUNTDOWN' && (
+                            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
+                                <div
+                                    key={countdown}
+                                    style={{
+                                        animation: 'countdownPop 0.5s ease-out forwards',
+                                        fontSize: countdown === 'GO!' ? '5rem' : '8rem',
+                                        color: countdown === 'GO!' ? '#4ade80' : countdown === 1 ? '#f87171' : countdown === 2 ? '#fbbf24' : '#a78bfa',
+                                        fontFamily: "'Quicksand', sans-serif",
+                                        fontWeight: 900,
+                                        lineHeight: 1,
+                                        textShadow: '0 0 40px currentColor, 0 4px 0 rgba(0,0,0,0.4)',
+                                        display: 'inline-block',
+                                    }}
+                                >
+                                    {countdown}
+                                </div>
                             </div>
                         )}
 
@@ -790,7 +922,7 @@
                             <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
                                 <h2 className="text-3xl font-black text-purple-500 mb-6">DIJEDA</h2>
                                 <button onClick={() => setGameState('PLAYING')} className="cute-btn-text px-8 py-3 text-lg font-bold mb-4">LANJUTKAN</button>
-                                <button onClick={() => { channelRef.current?.unsubscribe(); setGameState('LOBBY_MAIN'); }} className="text-gray-400 font-bold underline">Keluar ke Menu</button>
+                                <button onClick={() => { cleanupChannels(); setMultiMode('SINGLE'); setGameState('LOBBY_MAIN'); }} className="text-gray-400 font-bold underline">Keluar ke Menu</button>
                             </div>
                         )}
 
@@ -802,7 +934,7 @@
                                         <h2 className="text-3xl font-black text-red-400 mb-2">WAKTU HABIS!</h2>
                                         <p className="text-lg text-gray-500 font-bold mb-1">Skormu: <span className="text-pink-500 text-3xl">{score}</span></p>
                                         {multiMode === 'VERSUS' && <p className="text-lg text-gray-500 font-bold mb-6">Skor {opponentName}: <span className="text-red-400 text-3xl">{opponentScore}</span></p>}
-                                        <button onClick={() => { channelRef.current?.unsubscribe(); setGameState('LOBBY_MAIN'); }} className="cute-btn-text bg-gradient-to-r from-red-400 to-pink-500 px-8 py-3 text-lg font-bold mt-6">Kembali ke Menu</button>
+                                        <button onClick={() => { cleanupChannels(); setMultiMode('SINGLE'); setGameState('LOBBY_MAIN'); }} className="cute-btn-text bg-gradient-to-r from-red-400 to-pink-500 px-8 py-3 text-lg font-bold mt-6">Kembali ke Menu</button>
                                     </>
                                 )}
                             </div>
@@ -830,5 +962,3 @@
     </script>
 </body>
 </html>
-
-
