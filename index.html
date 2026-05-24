@@ -4,51 +4,35 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pokémon Connect Multiplayer Kawaii</title>
+    <title>Pokémon Connect Ultimate</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@600;700;800&display=swap" rel="stylesheet">
     
-    <!-- Tailwind & React -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    
-    <!-- Ably Realtime untuk Multiplayer -->
     <script src="https://cdn.ably.com/lib/ably.min-1.js"></script>
     
     <style>
         body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            background-color: #fce7f3; /* pink-100 */
-            touch-action: none;
-            overflow: hidden;
-            user-select: none;
-            -webkit-user-select: none;
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            background-color: #fce7f3; touch-action: none;
+            overflow: hidden; user-select: none; -webkit-user-select: none;
             font-family: 'Quicksand', sans-serif;
         }
 
-        /* Tombol Lucu */
         .cute-button {
-            background-color: white;
-            color: #ec4899;
-            border: 2px solid #fbcfe8;
-            border-radius: 50%;
-            transition: all 0.1s ease;
-            outline: none;
+            background-color: white; color: #ec4899;
+            border: 2px solid #fbcfe8; border-radius: 50%;
+            transition: all 0.1s ease; outline: none;
         }
-        .cute-button:active {
-            transform: scale(0.9);
-            background-color: #fdf2f8;
-        }
+        .cute-button:active { transform: scale(0.9); background-color: #fdf2f8; }
+        
         .cute-btn-text {
             background: linear-gradient(to right, #f472b6, #c084fc);
-            color: white;
-            border-radius: 9999px;
+            color: white; border-radius: 9999px;
             box-shadow: 0 4px 0 #d8b4fe, 0 6px 10px rgba(0,0,0,0.15);
             transition: all 0.1s;
         }
@@ -57,55 +41,37 @@
             box-shadow: 0 0 0 #d8b4fe, 0 2px 4px rgba(0,0,0,0.15);
         }
 
-        /* Kartu Pokemon */
         .cute-tile {
-            background-color: white;
-            border: 1.5px solid #fbcfe8;
-            border-radius: 6px;
-            width: 100%;
-            height: 100%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            /* Transisi reguler (saat tidak mati) */
+            background-color: white; border: 1.5px solid #fbcfe8;
+            border-radius: 6px; width: 100%; height: 100%;
+            display: flex; align-items: center; justify-content: center;
             transition: transform 0.15s ease-out, border-color 0.15s ease-out;
             position: relative;
         }
         
         .cute-tile.selected {
-            background-color: #fff1f2;
-            border: 2px solid #ec4899;
-            transform: scale(1.12);
-            box-shadow: 0 4px 12px rgba(236, 72, 153, 0.4);
-            z-index: 30;
+            background-color: #fff1f2; border: 2px solid #ec4899;
+            transform: scale(1.12); box-shadow: 0 4px 12px rgba(236, 72, 153, 0.4); z-index: 30;
         }
 
-        /* ANIMASI SINKRON KARTU: Mengambang lalu memudar */
         .cute-tile.matched {
-            /* Memudar (Opacity) ditunda 0.2s, lalu menghilang dalam 0.15s = total 0.35s! */
             transition: transform 0.2s ease-out, opacity 0.15s ease-out 0.2s; 
-            opacity: 0;
-            transform: scale(1.2) translateY(-12px);
-            pointer-events: none;
-            z-index: 40;
-            box-shadow: 0 0 15px rgba(251, 191, 36, 0.8);
-            border-color: #fbbf24;
+            opacity: 0; transform: scale(1.2) translateY(-12px);
+            pointer-events: none; z-index: 40;
+            box-shadow: 0 0 15px rgba(251, 191, 36, 0.8); border-color: #fbbf24;
         }
 
-        /* ANIMASI SINKRON GARIS: Meluncur, Diam Sebentar, lalu Memudar Bareng Kartu */
         @keyframes drawAndFadeJelly {
             0%   { stroke-dashoffset: 100; opacity: 1; }
-            40%  { stroke-dashoffset: 0;   opacity: 1; } /* Selesai digambar */
-            60%  { stroke-dashoffset: 0;   opacity: 1; } /* Tahan sebentar */
-            100% { stroke-dashoffset: 0;   opacity: 0; } /* Menghilang bersamaan kartu di 0.35s */
+            40%  { stroke-dashoffset: 0;   opacity: 1; } 
+            60%  { stroke-dashoffset: 0;   opacity: 1; } 
+            100% { stroke-dashoffset: 0;   opacity: 0; } 
         }
         .path-line-outer, .path-line-inner {
             stroke-dasharray: 100;
-            /* Animasi garis berjalan tepat 0.35 detik untuk sinkronisasi mutlak */
             animation: drawAndFadeJelly 0.35s ease-out forwards; 
         }
 
-        /* Kedip Hint */
         @keyframes pulseHint {
             0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.7); }
             50% { transform: scale(1.1); box-shadow: 0 0 0 8px rgba(251, 191, 36, 0); border-color: #fbbf24;}
@@ -120,14 +86,12 @@
     <script type="text/babel">
         const { useState, useEffect, useCallback, useRef } = React;
 
-        // Inisialisasi Ably
         const ABLY_KEY = '4opURQ.FVPiqg:z5W8zQxWoBNlXmlAXvOv4Bz1bmn_ISnFucJGpjFijS8';
-        const ably = new Ably.Realtime({ key: ABLY_KEY });
+        const ably = new Ably.Realtime({ key: ABLY_KEY, echoMessages: false }); 
 
         const ROWS = 16; 
         const COLS = 10;
         
-        // 150+ Pokemon Lucu/Bayi
         const ALL_CUTE_POKEMON = [
             1, 4, 7, 10, 13, 16, 25, 27, 35, 37, 39, 43, 50, 52, 54, 58, 60, 74, 79, 86, 90, 104, 116, 133, 143, 147, 151, 
             152, 155, 158, 161, 165, 172, 173, 174, 175, 179, 183, 187, 191, 194, 216, 220, 228, 231, 238, 246, 251, 252, 255, 
@@ -142,10 +106,8 @@
         const IconSearch = () => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" /></svg>;
         const IconRefresh = () => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>;
         const IconPause = () => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6"><path fillRule="evenodd" d="M6.75 5.25a.75.75 0 01.75-.75H9a.75.75 0 01.75.75v13.5a.75.75 0 01-.75.75H7.5a.75.75 0 01-.75-.75V5.25zm7.5 0A.75.75 0 0115 4.5h1.5a.75.75 0 01.75.75v13.5a.75.75 0 01-.75.75H15a.75.75 0 01-.75-.75V5.25z" clipRule="evenodd" /></svg>;
-        const IconStar = () => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#fbbf24" stroke="#f59e0b" strokeWidth="1" className="w-5 h-5"><path fillRule="evenodd" d="M10.788 3.21c.448-1.077 1.976-1.077 2.424 0l2.082 5.006 5.404.434c1.164.093 1.636 1.545.749 2.305l-4.117 3.527 1.257 5.273c.271 1.136-.964 2.033-1.96 1.425L12 18.354 7.373 21.18c-.996.608-2.231-.29-1.96-1.425l1.257-5.273-4.117-3.527c-.887-.76-.415-2.212.749-2.305l5.404-.434 2.082-5.005Z" clipRule="evenodd" /></svg>;
-        const IconUser = () => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path fillRule="evenodd" d="M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z" clipRule="evenodd" /></svg>;
 
-        // --- ALGORITMA PATHFINDING ONET ---
+        // --- ALGORITMA PATHFINDING ---
         const isPathClear = (board, r1, c1, r2, c2) => {
             if (r1 === r2) {
                 const minC = Math.min(c1, c2); const maxC = Math.max(c1, c2);
@@ -204,38 +166,61 @@
             return null;
         };
 
-        // --- KOMPONEN UTAMA ---
         const App = () => {
+            // Local Storage untuk Nama Pemain
+            const [playerName, setPlayerName] = useState(() => localStorage.getItem('pkmnPlayerName') || '');
+            const [opponentName, setOpponentName] = useState('');
+            
+            // State: LOGIN -> LOBBY_MAIN -> MATCHMAKING -> LOADING_BOARD -> WAITING_HOST_START -> PLAYING -> WON/GAMEOVER/PAUSED
+            const [gameState, setGameState] = useState(playerName ? 'LOBBY_MAIN' : 'LOGIN'); 
+            
             const [board, setBoard] = useState([]);
             const [level, setLevel] = useState(1);
             const [score, setScore] = useState(0);
             const [hp, setHp] = useState(3);
-            const [progress, setProgress] = useState(100);
-            
+            const [progress, setProgress] = useState(100); 
             const [hints, setHints] = useState(3);
             const [shuffles, setShuffles] = useState(3);
-            
             const [selectedTile, setSelectedTile] = useState(null);
+            
             const [matchedTiles, setMatchedTiles] = useState([]); 
             const [hintActiveTiles, setHintActiveTiles] = useState([]); 
             const [activePath, setActivePath] = useState(null); 
 
             // Multiplayer States
-            const [gameState, setGameState] = useState('LOBBY_MAIN'); // LOBBY_MAIN, LOBBY_CREATE, LOBBY_JOIN, WAITING, PLAYING, WON, GAMEOVER
-            const [multiMode, setMultiMode] = useState('SINGLE'); // SINGLE, VERSUS, COOP
-            const [roomId, setRoomId] = useState('');
-            const [joinInput, setJoinInput] = useState('');
+            const [multiMode, setMultiMode] = useState('SINGLE'); 
             const [isHost, setIsHost] = useState(true);
             const [opponentScore, setOpponentScore] = useState(0);
+            const [multiplayerReady, setMultiplayerReady] = useState({ host: false, guest: false });
 
             const isAnimating = useRef(false);
             const channelRef = useRef(null);
-            const clientId = useRef(Math.random().toString(36).substr(2, 6)); // ID Unik pemain ini
+            const matchmakingChannelRef = useRef(null);
+            const clientId = useRef(Math.random().toString(36).substr(2, 6)); 
             const boardRef = useRef(board); 
             
             useEffect(() => { boardRef.current = board; }, [board]);
 
-            // GENERATE BOARD ACAK (Bisa di-passing seed/board dari Host)
+            // Cek Kesiapan Multiplayer
+            useEffect(() => {
+                if (isHost && multiMode !== 'SINGLE' && gameState === 'LOADING_BOARD') {
+                    if (multiplayerReady.host && multiplayerReady.guest) {
+                        channelRef.current?.publish('action', { type: 'START_PLAYING' });
+                        finalizeStart();
+                        setMultiplayerReady({host: false, guest: false});
+                    }
+                }
+            }, [multiplayerReady, isHost, multiMode, gameState]);
+
+            const handleLogin = () => {
+                if(playerName.trim()) {
+                    localStorage.setItem('pkmnPlayerName', playerName.trim());
+                    setGameState('LOBBY_MAIN');
+                } else {
+                    alert("Namanya diisi dulu ya!");
+                }
+            };
+
             const generateBoard = useCallback(() => {
                 const newBoard = Array.from({ length: ROWS + 2 }, () => Array(COLS + 2).fill(0));
                 let shuffledPool = [...ALL_CUTE_POKEMON].sort(() => Math.random() - 0.5);
@@ -262,14 +247,67 @@
                 return newBoard;
             }, []);
 
-            // MULAI GAME
-            const startGame = (startLevel = 1, providedBoard = null) => {
+            // --- SISTEM PRE-LOAD GAMBAR (ANTI-KOSONG) ---
+            const preloadBoardImages = async (boardData) => {
+                setGameState('LOADING_BOARD');
+                setProgress(0); // Pinjam state progress untuk progress bar loading
+
+                const uniqueIds = new Set();
+                for(let r = 1; r <= ROWS; r++) {
+                    for(let c = 1; c <= COLS; c++) {
+                        if(boardData[r][c] !== 0) uniqueIds.add(boardData[r][c]);
+                    }
+                }
+                const ids = Array.from(uniqueIds);
+                let loadedCount = 0;
+
+                const loadPromises = ids.map(id => {
+                    return new Promise((resolve) => {
+                        const img = new Image();
+                        img.src = `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${id}.png`;
+                        img.onload = () => {
+                            loadedCount++;
+                            setProgress(Math.floor((loadedCount / ids.length) * 100));
+                            resolve();
+                        };
+                        img.onerror = () => {
+                            loadedCount++; // Anggap selesai agar tidak macet
+                            resolve();
+                        };
+                    });
+                });
+
+                // Timeout maksimal 8 detik, jika koneksi ngelag, paksakan masuk game
+                const timeoutPromise = new Promise(resolve => setTimeout(resolve, 8000));
+                await Promise.race([Promise.all(loadPromises), timeoutPromise]);
+            };
+
+            const prepareLevel = async (startLevel = 1, providedBoard = null) => {
                 const b = providedBoard || generateBoard();
                 setBoard(b);
                 setLevel(startLevel);
                 if (startLevel === 1) {
                     setScore(0); setHp(3); setHints(3); setShuffles(3); setOpponentScore(0);
                 }
+                
+                // 1. Mulai Pre-load gambar
+                await preloadBoardImages(b);
+
+                // 2. Logika Sinkronisasi setelah selesai load
+                if (multiMode === 'SINGLE') {
+                    finalizeStart();
+                } else {
+                    if (isHost) {
+                        setMultiplayerReady(prev => ({...prev, host: true}));
+                        // Menunggu useEffect memeriksa apakah guest juga ready
+                    } else {
+                        channelRef.current?.publish('action', { type: 'GUEST_READY' });
+                        setGameState('WAITING_HOST_START');
+                    }
+                }
+            };
+
+            const finalizeStart = () => {
                 setProgress(100);
                 setGameState('PLAYING');
                 setSelectedTile(null);
@@ -277,65 +315,86 @@
                 setActivePath(null);
                 setHintActiveTiles([]);
                 isAnimating.current = false;
-
-                // Sync board baru ke Guest jika kita Host
-                if (isHost && multiMode !== 'SINGLE' && startLevel > 1) {
-                    channelRef.current?.publish('action', { type: 'NEXT_LEVEL', board: b, level: startLevel });
-                }
             };
 
-            // SETUP ABLY MULTIPLAYER
-            const setupMultiplayer = (rId, mode, amIHost) => {
-                setRoomId(rId);
+            // AUTO MATCHMAKING LOBBY
+            const startMatchmaking = (mode) => {
                 setMultiMode(mode);
-                setIsHost(amIHost);
+                setGameState('MATCHMAKING');
                 
-                const ch = ably.channels.get(`pkmn-room-${rId}`);
-                channelRef.current = ch;
+                const lobbyChannel = ably.channels.get(`pkmn-lobby-${mode}`);
+                matchmakingChannelRef.current = lobbyChannel;
 
+                lobbyChannel.presence.get((err, members) => {
+                    if (err || members.length === 0) {
+                        // Tidak ada yang antri, kita jadi Host
+                        setIsHost(true);
+                        const newRoomId = Math.random().toString(36).substr(2, 8);
+                        
+                        const privateChannel = ably.channels.get(`pkmn-room-${newRoomId}`);
+                        channelRef.current = privateChannel;
+                        setupRoomListeners(privateChannel, true, mode);
+
+                        lobbyChannel.presence.enter({ roomId: newRoomId, hostName: playerName });
+                    } else {
+                        // Ada Host! Kita gabung
+                        setIsHost(false);
+                        const targetHost = members[0]; 
+                        const targetRoom = targetHost.data.roomId;
+                        setOpponentName(targetHost.data.hostName);
+
+                        const privateChannel = ably.channels.get(`pkmn-room-${targetRoom}`);
+                        channelRef.current = privateChannel;
+                        setupRoomListeners(privateChannel, false, mode);
+                        
+                        privateChannel.publish('action', { type: 'GUEST_JOIN', guestName: playerName });
+                        lobbyChannel.presence.leave();
+                    }
+                });
+            };
+
+            const setupRoomListeners = (ch, amIHost, mode) => {
                 ch.subscribe('action', (msg) => {
                     const data = msg.data;
                     
-                    // Host Menerima Permintaan Join dari Guest
                     if (data.type === 'GUEST_JOIN' && amIHost) {
+                        setOpponentName(data.guestName);
+                        matchmakingChannelRef.current?.presence.leave(); 
+                        
                         const newB = generateBoard();
-                        ch.publish('action', { type: 'START_GAME', board: newB, mode: mode });
-                        startGame(1, newB); // Mulai game Host
+                        ch.publish('action', { type: 'START_GAME_SYNC', board: newB, mode: mode, hostName: playerName });
+                        prepareLevel(1, newB); // Host mulai loading level
                     }
                     
-                    // Guest Menerima Papan & Start dari Host
-                    if (data.type === 'START_GAME' && !amIHost) {
+                    if (data.type === 'START_GAME_SYNC' && !amIHost) {
                         setMultiMode(data.mode);
-                        startGame(1, data.board); // Mulai game Guest dengan board Host
+                        setOpponentName(data.hostName);
+                        prepareLevel(1, data.board); // Guest terima board & mulai loading
                     }
 
-                    // Lawan Mencetak Skor (Versus)
-                    if (data.type === 'VS_SCORE' && data.clientId !== clientId.current) {
-                        setOpponentScore(data.score);
+                    if (data.type === 'GUEST_READY' && amIHost) {
+                        setMultiplayerReady(prev => ({...prev, guest: true}));
                     }
 
-                    // Teman Mencocokkan Kartu (Co-op)
-                    if (data.type === 'COOP_MATCH' && data.clientId !== clientId.current) {
-                        handleRemoteMatch(data.r1, data.c1, data.r2, data.c2, data.path);
+                    if (data.type === 'START_PLAYING' && !amIHost) {
+                        finalizeStart(); // Host bilang GO, Guest masuk mode PLAYING
                     }
 
-                    // Pindah Level (Dikendalikan Host)
-                    if (data.type === 'NEXT_LEVEL' && !amIHost) {
-                        startGame(data.level, data.board);
+                    if (data.type === 'VS_SCORE') setOpponentScore(data.score);
+                    if (data.type === 'COOP_MATCH') handleRemoteMatch(data.r1, data.c1, data.r2, data.c2, data.path);
+
+                    if (data.type === 'NEXT_LEVEL_SYNC' && !amIHost) {
+                        prepareLevel(data.level, data.board);
                     }
                     
-                    // Sinkronisasi Shuffle (Jika host shuffle, guest juga ikut)
-                    if (data.type === 'SYNC_SHUFFLE' && !amIHost) {
-                        setBoard(data.board);
-                    }
+                    if (data.type === 'SYNC_SHUFFLE' && !amIHost) setBoard(data.board);
                 });
+            };
 
-                if (amIHost) {
-                    setGameState('WAITING');
-                } else {
-                    ch.publish('action', { type: 'GUEST_JOIN' });
-                    setGameState('WAITING'); // Menunggu respon Host
-                }
+            const cancelMatchmaking = () => {
+                matchmakingChannelRef.current?.presence.leave();
+                channelRef.current?.unsubscribe();
+                setGameState('LOBBY_MAIN');
             };
 
             // SISTEM WAKTU DINAMIS
@@ -354,11 +413,13 @@
             const handleTimeout = () => {
                 if (hp > 1) {
                     setHp(h => h - 1);
-                    // Jika co-op, biarkan host yang merestart
                     if (multiMode === 'COOP' && !isHost) return; 
-                    
                     const newB = generateBoard();
-                    startGame(level, newB); 
+                    
+                    if (isHost && multiMode !== 'SINGLE') {
+                        channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: level });
+                    }
+                    prepareLevel(level, newB); 
                 } else {
                     setGameState('GAMEOVER');
                 }
@@ -384,15 +445,12 @@
             };
 
             const handleShuffleClick = () => {
-                // Di Co-op, hanya host yang bisa shuffle gratis atau manual agar sinkron
                 if (shuffles > 0 && gameState === 'PLAYING' && !isAnimating.current) {
                     setShuffles(s => s - 1);
                     const newB = performShuffle(board);
                     setBoard(newB);
                     setSelectedTile(null);
-                    if (multiMode === 'COOP' && isHost) {
-                        channelRef.current?.publish('action', { type: 'SYNC_SHUFFLE', board: newB });
-                    }
+                    if (multiMode === 'COOP' && isHost) channelRef.current?.publish('action', { type: 'SYNC_SHUFFLE', board: newB });
                 }
             };
 
@@ -415,9 +473,12 @@
                 if (empty) {
                     setGameState('WON');
                     setTimeout(() => {
-                        if (multiMode === 'COOP' && !isHost) return; // Hanya host ganti level di co-op
+                        if (multiMode === 'COOP' && !isHost) return; 
                         const newB = generateBoard();
-                        startGame(level + 1, newB);
+                        if (isHost && multiMode !== 'SINGLE') {
+                            channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: level + 1 });
+                        }
+                        prepareLevel(level + 1, newB);
                     }, 2000);
                     return true;
                 }
@@ -425,22 +486,18 @@
                     if (multiMode === 'COOP' && !isHost) return; 
                     const newB = performShuffle(b);
                     setBoard(newB);
-                    if (multiMode === 'COOP' && isHost) {
-                        channelRef.current?.publish('action', { type: 'SYNC_SHUFFLE', board: newB });
-                    }
+                    if (multiMode === 'COOP' && isHost) channelRef.current?.publish('action', { type: 'SYNC_SHUFFLE', board: newB });
                 }
                 return false;
             };
 
-            // HANDLE KONEK REMOTE DARI TEMAN (CO-OP)
             const handleRemoteMatch = useCallback((r1, c1, r2, c2, path) => {
                 isAnimating.current = true;
                 setHintActiveTiles([]); 
                 setActivePath(path);
                 
-                // Ambil ID langsung dari referensi board terkini
                 const b = boardRef.current;
-                if (b[r1][c1] === 0 || b[r2][c2] === 0) { isAnimating.current = false; return; } // Sudah dimatch
+                if (b[r1][c1] === 0 || b[r2][c2] === 0) { isAnimating.current = false; return; }
 
                 setMatchedTiles([ {r: r1, c: c1, id: b[r1][c1]}, {r: r2, c: c2, id: b[r2][c2]} ]);
 
@@ -453,16 +510,13 @@
                     });
                     
                     setSelectedTile(null); setActivePath(null); setMatchedTiles([]); 
-                    setScore(s => s + 10);
-                    setProgress(p => Math.min(100, p + 4)); 
+                    setScore(s => s + 10); setProgress(p => Math.min(100, p + 4)); 
                     isAnimating.current = false;
                 }, 350);
             }, []);
 
-            // HANDLE KLIK LOKAL
             const handleTileClick = (r, c) => {
                 if (gameState !== 'PLAYING' || isAnimating.current || board[r][c] === 0) return;
-
                 if (selectedTile && selectedTile.r === r && selectedTile.c === c) { setSelectedTile(null); return; }
                 if (!selectedTile) { setSelectedTile({r, c}); return; }
 
@@ -475,16 +529,10 @@
                     
                     const r1 = selectedTile.r; const c1 = selectedTile.c;
                     const id1 = board[r1][c1]; const id2 = board[r][c];
-                    
                     setMatchedTiles([ {r: r1, c: c1, id: id1}, {r, c, id: id2} ]);
 
-                    // KIRIM KE ABLY MULTIPLAYER JIKA AKTIF
-                    if (multiMode === 'COOP') {
-                        channelRef.current?.publish('action', { type: 'COOP_MATCH', clientId: clientId.current, r1, c1, r2: r, c2: c, path });
-                    }
-                    if (multiMode === 'VERSUS') {
-                        channelRef.current?.publish('action', { type: 'VS_SCORE', clientId: clientId.current, score: score + 10 });
-                    }
+                    if (multiMode === 'COOP') channelRef.current?.publish('action', { type: 'COOP_MATCH', r1, c1, r2: r, c2: c, path });
+                    if (multiMode === 'VERSUS') channelRef.current?.publish('action', { type: 'VS_SCORE', score: score + 10 });
 
                     setTimeout(() => {
                         const newBoard = [...board.map(row => [...row])];
@@ -495,7 +543,7 @@
                         setScore(s => s + 10); setProgress(p => Math.min(100, p + 4)); 
                         isAnimating.current = false;
                         checkLevelComplete(newBoard);
-                    }, 350); // Waktu 350ms adalah sinkron mutlak untuk memudar
+                    }, 350); 
 
                 } else {
                     setSelectedTile({r, c});
@@ -506,39 +554,29 @@
                 <div className="w-full h-[100dvh] bg-pink-100 flex items-center justify-center p-1 sm:p-2">
                     <div className="w-full max-w-[480px] h-full flex flex-col bg-white border-[3px] border-pink-300 rounded-xl shadow-lg overflow-hidden relative">
                         
-                        {/* 1. KEPALA (MENU ATAS) */}
+                        {/* ===================== KEPALA ===================== */}
                         <div className="w-full bg-pink-50 p-2 sm:p-3 flex flex-col gap-1 sm:gap-2 shrink-0 border-b-[2px] border-pink-200 z-50 relative">
-                            
-                            {/* MULTIPLAYER INDICATOR BAR */}
                             {multiMode !== 'SINGLE' && (
                                 <div className="w-full bg-white/80 rounded-full px-3 py-1 flex justify-between items-center text-xs font-bold shadow-sm border border-pink-100 mb-1">
-                                    <span className="text-purple-500">
-                                        {multiMode === 'COOP' ? '🤝 Mode Co-op Bersama' : '⚔️ Mode Versus Adu Skor'}
+                                    <span className="text-purple-600 truncate max-w-[50%]">
+                                        {multiMode === 'COOP' ? `Bersama: ${opponentName}` : `${playerName} vs ${opponentName}`}
                                     </span>
                                     {multiMode === 'VERSUS' && (
-                                        <span className="text-red-400 bg-red-50 px-2 rounded-full">Musuh: {opponentScore}</span>
+                                        <span className="text-red-500 bg-red-50 px-2 py-0.5 rounded-full border border-red-100">Lawan: {opponentScore}</span>
                                     )}
                                 </div>
                             )}
-
                             <div className="flex items-center justify-between gap-1 sm:gap-2">
                                 <div className="flex items-center bg-white rounded-full px-2 py-0.5 sm:py-1 shadow-sm border border-pink-200">
-                                    <IconHeart />
-                                    <span className="ml-1 text-xs sm:text-sm font-bold text-pink-500">{hp}</span>
+                                    <IconHeart /><span className="ml-1 text-xs sm:text-sm font-bold text-pink-500">{hp}</span>
                                 </div>
-                                <div className="text-lg sm:text-xl font-bold text-pink-500 flex items-center gap-1">
-                                    <IconStar /> Level {level}
-                                </div>
+                                <div className="text-lg sm:text-xl font-bold text-pink-500 flex items-center gap-1">Level {level}</div>
                                 <div className="flex-1 max-w-[90px] sm:max-w-[100px] bg-white rounded-full h-3 sm:h-4 p-[2px] shadow-inner border border-pink-200 relative overflow-hidden">
                                     <div className="h-full rounded-full transition-all duration-200 ease-linear"
-                                        style={{
-                                            width: `${progress}%`,
-                                            backgroundImage: progress > 50 ? 'linear-gradient(to right, #a78bfa, #f472b6)' : progress > 25 ? 'linear-gradient(to right, #fde047, #f59e0b)' : 'linear-gradient(to right, #fca5a5, #ef4444)' 
-                                        }}
+                                        style={{ width: `${progress}%`, backgroundImage: progress > 50 ? 'linear-gradient(to right, #a78bfa, #f472b6)' : progress > 25 ? 'linear-gradient(to right, #fde047, #f59e0b)' : 'linear-gradient(to right, #fca5a5, #ef4444)' }}
                                     />
                                 </div>
                             </div>
-
                             <div className="flex justify-between items-center mt-1">
                                 <div className="text-xs sm:text-sm font-bold bg-white px-3 py-1 sm:px-4 sm:py-1.5 rounded-full text-pink-500 border border-pink-200 tracking-wide shadow-sm">
                                     Skor: {score}
@@ -546,34 +584,26 @@
                                 <div className="flex gap-1.5 sm:gap-2">
                                     <button onClick={handleHintClick} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center relative shadow-sm"><IconSearch /><span className="absolute -top-1 -right-1 bg-pink-500 text-white text-[9px] sm:text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{hints}</span></button>
                                     <button onClick={handleShuffleClick} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center relative shadow-sm"><IconRefresh /><span className="absolute -top-1 -right-1 bg-purple-500 text-white text-[9px] sm:text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{shuffles}</span></button>
-                                    <button onClick={() => setGameState('PAUSED')} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center text-pink-500 shadow-sm"><IconPause /></button>
+                                    <button onClick={() => setGameState('PAUSED')} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center text-pink-500 shadow-sm">
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5"><path fillRule="evenodd" d="M6.75 5.25a.75.75 0 01.75-.75H9a.75.75 0 01.75.75v13.5a.75.75 0 01-.75.75H7.5a.75.75 0 01-.75-.75V5.25zm7.5 0A.75.75 0 0115 4.5h1.5a.75.75 0 01.75.75v13.5a.75.75 0 01-.75.75H15a.75.75 0 01-.75-.75V5.25z" clipRule="evenodd" /></svg>
+                                    </button>
                                 </div>
                             </div>
                         </div>
 
-                        {/* 2. BADAN (AREA GRID) */}
+                        {/* ===================== BADAN GRID ===================== */}
                         <div className="flex-1 w-full relative bg-white p-[1px] sm:p-[2px]">
                             {board.length > 0 && (
                                 <>
-                                    {/* LAYER SVG PENGHUBUNG (Z-10) -> Di Bawah Kartu, Animasi Memudar 350ms Sempurna */}
                                     <svg viewBox={`0 0 ${COLS + 2} ${ROWS + 2}`} preserveAspectRatio="none" className="absolute inset-[1px] sm:inset-[2px] w-[calc(100%-2px)] sm:w-[calc(100%-4px)] h-[calc(100%-2px)] sm:h-[calc(100%-4px)] pointer-events-none" style={{ zIndex: 10 }}>
                                         {activePath && (
                                             <g>
-                                                <path
-                                                    d={`M ${activePath.map(p => `${p.c + 0.5} ${p.r + 0.5}`).join(' L ')}`}
-                                                    fill="none" stroke="#f472b6" strokeWidth="0.18" strokeLinecap="round" strokeLinejoin="round"
-                                                    className="path-line-outer drop-shadow-sm"
-                                                />
-                                                <path
-                                                    d={`M ${activePath.map(p => `${p.c + 0.5} ${p.r + 0.5}`).join(' L ')}`}
-                                                    fill="none" stroke="#ffffff" strokeWidth="0.07" strokeLinecap="round" strokeLinejoin="round"
-                                                    className="path-line-inner"
-                                                />
+                                                <path d={`M ${activePath.map(p => `${p.c + 0.5} ${p.r + 0.5}`).join(' L ')}`} fill="none" stroke="#f472b6" strokeWidth="0.18" strokeLinecap="round" strokeLinejoin="round" className="path-line-outer drop-shadow-sm"/>
+                                                <path d={`M ${activePath.map(p => `${p.c + 0.5} ${p.r + 0.5}`).join(' L ')}`} fill="none" stroke="#ffffff" strokeWidth="0.07" strokeLinecap="round" strokeLinejoin="round" className="path-line-inner"/>
                                             </g>
                                         )}
                                     </svg>
 
-                                    {/* LAYER KARTU POKEMON (Z-20) */}
                                     <div className="absolute inset-[1px] sm:inset-[2px] grid gap-[1.5px] sm:gap-[2px]" style={{ zIndex: 20, gridTemplateColumns: `repeat(${COLS + 2}, 1fr)`, gridTemplateRows: `repeat(${ROWS + 2}, 1fr)` }}>
                                         {board.map((row, r) => row.map((cellId, c) => {
                                             if (r === 0 || r === ROWS + 1 || c === 0 || c === COLS + 1) return <div key={`${r}-${c}`} className="w-full h-full pointer-events-none"></div>;
@@ -603,60 +633,66 @@
                             )}
                         </div>
 
-                        {/* LOBBY & OVERLAYS */}
+                        {/* ===================== OVERLAYS ===================== */}
+                        
+                        {gameState === 'LOGIN' && (
+                            <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
+                                <h1 className="text-4xl font-black text-pink-500 mb-2 drop-shadow-sm text-center">POKÉMON<br/>CONNECT</h1>
+                                <p className="text-gray-500 font-bold mb-6">Siapa namamu?</p>
+                                <input 
+                                    type="text" placeholder="Masukkan Nama" maxLength={12}
+                                    className="border-4 border-pink-200 rounded-xl px-4 py-3 text-center text-xl font-bold text-gray-700 w-3/4 max-w-[250px] mb-6 focus:outline-none focus:border-pink-400"
+                                    value={playerName} onChange={e => setPlayerName(e.target.value)}
+                                    onKeyDown={e => e.key === 'Enter' && handleLogin()}
+                                />
+                                <button onClick={handleLogin} className="cute-btn-text w-3/4 max-w-[250px] py-3 text-lg font-bold">Mulai!</button>
+                            </div>
+                        )}
+
                         {gameState === 'LOBBY_MAIN' && (
                             <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
                                 <h1 className="text-4xl font-black text-pink-500 mb-1 drop-shadow-sm text-center">POKÉMON<br/>CONNECT</h1>
-                                <h2 className="text-lg font-bold text-purple-400 mb-10">Multiplayer Edition ✧</h2>
+                                <h2 className="text-lg font-bold text-purple-400 mb-8">Halo, {playerName}!</h2>
                                 
                                 <div className="flex flex-col gap-4 w-3/4 max-w-[250px]">
-                                    <button onClick={() => { setMultiMode('SINGLE'); startGame(1); }} className="cute-btn-text py-3 text-lg font-bold">Main Sendiri</button>
-                                    <button onClick={() => setGameState('LOBBY_CREATE')} className="cute-btn-text py-3 text-lg font-bold bg-gradient-to-r from-purple-400 to-indigo-400">Buat Room</button>
-                                    <button onClick={() => setGameState('LOBBY_JOIN')} className="cute-btn-text py-3 text-lg font-bold bg-gradient-to-r from-teal-400 to-emerald-400">Masuk Room</button>
+                                    <button onClick={() => prepareLevel(1)} className="cute-btn-text py-3 text-lg font-bold">Main Sendiri</button>
+                                    <button onClick={() => startMatchmaking('COOP')} className="cute-btn-text py-3 text-lg font-bold bg-gradient-to-r from-teal-400 to-emerald-400">Mode Co-op</button>
+                                    <button onClick={() => startMatchmaking('VERSUS')} className="cute-btn-text py-3 text-lg font-bold bg-gradient-to-r from-red-400 to-pink-500">Mode Versus</button>
+                                    <button onClick={() => { localStorage.removeItem('pkmnPlayerName'); setPlayerName(''); setGameState('LOGIN'); }} className="text-gray-400 font-bold underline mt-4">Ganti Nama</button>
                                 </div>
                             </div>
                         )}
 
-                        {gameState === 'LOBBY_CREATE' && (
-                            <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
-                                <h2 className="text-2xl font-black text-purple-500 mb-8">Pilih Mode Multiplayer</h2>
-                                <div className="flex flex-col gap-4 w-3/4 max-w-[250px]">
-                                    <button onClick={() => setupMultiplayer(Math.random().toString(36).substr(2, 4).toUpperCase(), 'COOP', true)} className="cute-btn-text py-3 text-lg font-bold">🤝 Mode Co-op</button>
-                                    <button onClick={() => setupMultiplayer(Math.random().toString(36).substr(2, 4).toUpperCase(), 'VERSUS', true)} className="cute-btn-text py-3 text-lg font-bold bg-gradient-to-r from-red-400 to-pink-500">⚔️ Mode Versus</button>
-                                    <button onClick={() => setGameState('LOBBY_MAIN')} className="text-gray-400 font-bold underline mt-4">Kembali</button>
-                                </div>
-                            </div>
-                        )}
-
-                        {gameState === 'LOBBY_JOIN' && (
-                            <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
-                                <h2 className="text-2xl font-black text-teal-500 mb-6">Masuk Room Teman</h2>
-                                <input 
-                                    type="text" placeholder="Masukkan 4 Digit Kode" maxLength={4}
-                                    className="border-4 border-teal-200 rounded-xl px-4 py-3 text-center text-xl font-bold text-gray-700 w-3/4 max-w-[250px] mb-4 uppercase"
-                                    value={joinInput} onChange={e => setJoinInput(e.target.value.toUpperCase())}
-                                />
-                                <button 
-                                    onClick={() => { if(joinInput.length > 0) setupMultiplayer(joinInput, 'COOP', false); }} 
-                                    className="cute-btn-text py-3 w-3/4 max-w-[250px] text-lg font-bold bg-gradient-to-r from-teal-400 to-emerald-400"
-                                >Gabung!</button>
-                                <button onClick={() => setGameState('LOBBY_MAIN')} className="text-gray-400 font-bold underline mt-4">Kembali</button>
-                            </div>
-                        )}
-
-                        {gameState === 'WAITING' && (
+                        {gameState === 'MATCHMAKING' && (
                             <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
                                 <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-purple-400 mb-6"></div>
-                                <h2 className="text-2xl font-black text-purple-500 mb-2">Menunggu...</h2>
-                                {isHost ? (
-                                    <>
-                                        <p className="text-gray-500 font-bold">Suruh temanmu masuk dengan kode:</p>
-                                        <div className="text-4xl font-black text-pink-500 my-4 bg-pink-100 px-6 py-2 rounded-2xl tracking-widest border-2 border-pink-300 shadow-sm">{roomId}</div>
-                                    </>
-                                ) : (
-                                    <p className="text-gray-500 font-bold">Sedang sinkronisasi dengan Host...</p>
-                                )}
-                                <button onClick={() => { channelRef.current?.unsubscribe(); setGameState('LOBBY_MAIN'); }} className="text-gray-400 font-bold underline mt-8">Batal</button>
+                                <h2 className="text-2xl font-black text-purple-500 mb-2">Mencari Pemain...</h2>
+                                <p className="text-gray-500 font-bold text-center px-6">Sistem sedang mencarikan lawan atau teman main secara otomatis.</p>
+                                <button onClick={cancelMatchmaking} className="text-gray-400 font-bold underline mt-8">Batal</button>
+                            </div>
+                        )}
+
+                        {gameState === 'LOADING_BOARD' && (
+                            <div className="absolute inset-0 bg-white/95 backdrop-blur-md flex flex-col items-center justify-center z-[100]">
+                                <div className="animate-bounce mb-6">
+                                    <div className="w-16 h-16 bg-white border-4 border-pink-500 rounded-full flex items-center justify-center overflow-hidden relative shadow-lg">
+                                        <div className="w-full h-1/2 bg-pink-500 absolute top-0"></div>
+                                        <div className="w-5 h-5 bg-white border-4 border-pink-500 rounded-full z-10"></div>
+                                    </div>
+                                </div>
+                                <h2 className="text-2xl font-black text-pink-500 mb-6">Memuat Pokémon...</h2>
+                                <div className="w-3/4 max-w-[250px] bg-pink-100 rounded-full h-5 p-1 shadow-inner border border-pink-200">
+                                    <div className="h-full rounded-full bg-gradient-to-r from-pink-400 to-purple-400 transition-all duration-300" style={{ width: `${progress}%` }}></div>
+                                </div>
+                                <p className="text-purple-400 font-bold mt-3 text-lg">{progress}%</p>
+                            </div>
+                        )}
+
+                        {gameState === 'WAITING_HOST_START' && (
+                            <div className="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
+                                <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-teal-400 mb-6"></div>
+                                <h2 className="text-2xl font-black text-teal-500 mb-2">Menunggu Pemain...</h2>
+                                <p className="text-gray-500 font-bold text-center px-6">Sinkronisasi gambar selesai, menunggu pemain lain siap.</p>
                             </div>
                         )}
 
@@ -664,7 +700,7 @@
                             <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
                                 <h2 className="text-3xl font-black text-purple-500 mb-6">DIJEDA</h2>
                                 <button onClick={() => setGameState('PLAYING')} className="cute-btn-text px-8 py-3 text-lg font-bold mb-4">LANJUTKAN</button>
-                                <button onClick={() => setGameState('LOBBY_MAIN')} className="text-gray-400 font-bold underline">Keluar ke Menu</button>
+                                <button onClick={() => { channelRef.current?.unsubscribe(); setGameState('LOBBY_MAIN'); }} className="text-gray-400 font-bold underline">Keluar ke Menu</button>
                             </div>
                         )}
 
@@ -672,17 +708,16 @@
                             <div className="absolute inset-0 bg-pink-50/90 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
                                 <h2 className="text-3xl font-black text-red-400 mb-2">WAKTU HABIS!</h2>
                                 <p className="text-lg text-gray-500 font-bold mb-1">Skormu: <span className="text-pink-500 text-3xl">{score}</span></p>
-                                {multiMode === 'VERSUS' && <p className="text-lg text-gray-500 font-bold mb-6">Skor Lawan: <span className="text-red-400 text-3xl">{opponentScore}</span></p>}
-                                <button onClick={() => startGame(1)} className="cute-btn-text bg-gradient-to-r from-red-400 to-pink-500 px-8 py-3 text-lg font-bold mt-4">MAIN LAGI</button>
-                                <button onClick={() => setGameState('LOBBY_MAIN')} className="text-gray-400 font-bold underline mt-6">Keluar</button>
+                                {multiMode === 'VERSUS' && <p className="text-lg text-gray-500 font-bold mb-6">Skor {opponentName}: <span className="text-red-400 text-3xl">{opponentScore}</span></p>}
+                                <button onClick={() => { channelRef.current?.unsubscribe(); setGameState('LOBBY_MAIN'); }} className="cute-btn-text bg-gradient-to-r from-red-400 to-pink-500 px-8 py-3 text-lg font-bold mt-6">Kembali ke Menu</button>
                             </div>
                         )}
 
                         {gameState === 'WON' && (
                             <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
                                 <h2 className="text-3xl font-black text-green-400 mb-2">LEVEL {level} SELESAI!</h2>
-                                <p className="text-lg text-gray-500 mb-6 font-bold">Lanjut level {level + 1}...</p>
-                                {multiMode === 'COOP' && !isHost && <p className="text-sm text-pink-400">Menunggu Host...</p>}
+                                <p className="text-lg text-gray-500 mb-4 font-bold">Lanjut level {level + 1}...</p>
+                                {multiMode === 'COOP' && !isHost && <p className="text-sm text-pink-400 font-bold">Menunggu Host...</p>}
                                 <div className="animate-spin rounded-full h-10 w-10 border-t-4 border-b-4 border-pink-400 mt-4"></div>
                             </div>
                         )}
@@ -697,5 +732,4 @@
     </script>
 </body>
 </html>
-
 
