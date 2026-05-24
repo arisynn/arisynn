@@ -312,7 +312,7 @@
             return Math.ceil(ticksLeft * 0.2);
         };
 
-        // ===================== MATCHMAKING SCREEN COMPONENT =====================
+        // ===================== MATCHMAKING SCREEN =====================
         const MatchmakingScreen = ({ multiMode, playerName, onCancel, onRetry }) => {
             const [elapsed, setElapsed] = React.useState(0);
             const [dots, setDots] = React.useState('');
@@ -327,16 +327,16 @@
                 }, 500);
                 return () => clearInterval(tick);
             }, []);
-            const modeLabel = multiMode === 'COOP' ? 'Co-op' : 'Versus';
-            const modeColor = multiMode === 'COOP' ? 'text-teal-500' : 'text-red-500';
-            const spinColor = multiMode === 'COOP' ? 'border-teal-400' : 'border-red-400';
+            const isCoOp = multiMode === 'COOP';
+            const modeColor = isCoOp ? 'text-teal-500' : 'text-red-500';
+            const spinColor = isCoOp ? 'border-teal-400' : 'border-red-400';
             return (
                 <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100] px-6">
                     {!timedOut ? (
                         <>
                             <div className={`animate-spin rounded-full h-14 w-14 border-t-4 border-b-4 ${spinColor} mb-6`}></div>
                             <h2 className={`text-2xl font-black ${modeColor} mb-1`}>Mencari Pemain{dots}</h2>
-                            <p className="text-gray-400 font-bold text-sm mb-1">Mode: <span className={`font-black ${modeColor}`}>{modeLabel}</span></p>
+                            <p className="text-gray-400 font-bold text-sm mb-1">Mode: <span className={`font-black ${modeColor}`}>{isCoOp ? 'Co-op' : 'Versus'}</span></p>
                             <p className="text-gray-300 font-bold text-xs mb-8">{elapsed}s berlalu</p>
                             <div className="w-full max-w-[260px] bg-pink-50 border-2 border-pink-100 rounded-2xl p-4 mb-6 text-center">
                                 <p className="text-gray-500 font-bold text-sm">Menunggu pemain lain masuk lobby.</p>
@@ -407,13 +407,12 @@
             const hostSelfLoadedRef = useRef(false);
             const progressRef = useRef(100);
             const levelRef = useRef(1);
-            // Matchmaking refs
             const isHostRef = useRef(true);
             const multiModeRef = useRef('SINGLE');
-            const guestJoinSentRef = useRef(false);
-            const matchmakingTimerRef = useRef(null);
-            const gameMatchedRef = useRef(false); // prevent double-match
-            
+
+
+
+
             useEffect(() => { boardRef.current = board; }, [board]);
             useEffect(() => { progressRef.current = progress; }, [progress]);
             useEffect(() => { levelRef.current = level; }, [level]);
@@ -428,7 +427,13 @@
 
             // Monitor koneksi Ably
             useEffect(() => {
-                ably.connection.on('connected', () => setConnectionStatus('connected'));
+                ably.connection.on('connected', () => {
+                    setConnectionStatus('connected');
+                    // On reconnect during a game, guest requests latest board state
+                    if (channelRef.current && !isHostRef.current) {
+                        channelRef.current.publish('action', { type: 'SYNC_REQUEST' });
+                    }
+                });
                 ably.connection.on('disconnected', () => setConnectionStatus('disconnected'));
                 ably.connection.on('suspended', () => setConnectionStatus('disconnected'));
                 ably.connection.on('failed', () => setConnectionStatus('disconnected'));
@@ -559,17 +564,12 @@
                     setScore(0); setHp(3); setHints(3); setShuffles(3); setOpponentScore(0);
                     setIsNewRecord(false);
                 }
-                
                 await preloadBoardImages(b);
-
-                // Use refs here — never stale state
                 if (multiModeRef.current === 'SINGLE') {
                     runCountdownThenPlay(Date.now() + 3700);
                 } else {
-                    // Signal that this player finished loading
                     channelRef.current?.publish('action', { type: 'PLAYER_LOADED' });
                     setGameState('WAITING_BOTH_LOADED');
-
                     if (isHostRef.current) {
                         hostSelfLoadedRef.current = true;
                         if (hostLoadedCountRef.current >= 1) triggerSyncedStart();
@@ -580,7 +580,7 @@
             const triggerSyncedStart = () => {
                 hostLoadedCountRef.current = 0;
                 hostSelfLoadedRef.current = false;
-                // Give 4.2s from now: 3 + 2 + 1 + GO! countdown slots, plus small buffer
+                // Set startAt far enough that both players can receive and schedule their countdowns
                 const startAt = Date.now() + 4200;
                 channelRef.current?.publish('action', { type: 'START_AT', startAt });
                 runCountdownThenPlay(startAt);
@@ -628,8 +628,12 @@
             };
 
             // ===================== MATCHMAKING =====================
+            // Sistem dari v2 — terbukti work 100%
+            // Host tunggu di lobby, guest langsung join ke room host.
+            // Flow: attach lobby → get members → jika ada host: jadi guest → attach room → kirim GUEST_JOIN
+            //                                 → jika kosong: jadi host → buat room → masuk lobby presence → tunggu GUEST_JOIN
+
             const cleanupChannels = () => {
-                if (matchmakingTimerRef.current) { clearTimeout(matchmakingTimerRef.current); matchmakingTimerRef.current = null; }
                 if (matchmakingChannelRef.current) {
                     try { matchmakingChannelRef.current.presence.leave(); } catch(e) {}
                     try { matchmakingChannelRef.current.unsubscribe(); } catch(e) {}
@@ -637,124 +641,79 @@
                     matchmakingChannelRef.current = null;
                 }
                 if (channelRef.current) {
-                    try { channelRef.current.presence.leave(); } catch(e) {}
                     try { channelRef.current.unsubscribe(); } catch(e) {}
+                    try { channelRef.current.presence.leave(); } catch(e) {}
                     try { channelRef.current.presence.unsubscribe(); } catch(e) {}
                     channelRef.current = null;
                 }
                 hostLoadedCountRef.current = 0;
                 hostSelfLoadedRef.current = false;
                 pendingMatchRef.current = false;
-                guestJoinSentRef.current = false;
-                gameMatchedRef.current = false;
                 setConnectionStatus('connected');
-            };
-
-            // Called when this client decides to become Host
-            const becomeHost = (lobbyChannel, mode) => {
-                if (gameMatchedRef.current) return;
-                const newRoomId = Math.random().toString(36).substr(2, 8);
-                const privateChannel = ably.channels.get(`pkmn-room-${newRoomId}`);
-                channelRef.current = privateChannel;
-
-                privateChannel.attach((err) => {
-                    if (err || gameMatchedRef.current) return;
-                    // Subscribe to room BEFORE announcing in lobby
-                    setupRoomListeners(privateChannel, true, mode);
-                    // Now announce in lobby so guests can find us
-                    lobbyChannel.presence.enter({ roomId: newRoomId, hostName: playerName }, (presErr) => {
-                        if (presErr) console.error('Presence enter error:', presErr);
-                    });
-                });
-            };
-
-            // Called when this client decides to become Guest for a given host
-            const becomeGuest = (lobbyChannel, hostMember, mode) => {
-                if (gameMatchedRef.current) return;
-                gameMatchedRef.current = true;
-
-                const targetRoom = hostMember.data.roomId;
-                setOpponentName(hostMember.data.hostName);
-                setIsHost(false);
-                isHostRef.current = false;
-
-                const privateChannel = ably.channels.get(`pkmn-room-${targetRoom}`);
-                channelRef.current = privateChannel;
-
-                privateChannel.attach((err) => {
-                    if (err) { cleanupChannels(); setGameState('LOBBY_MAIN'); return; }
-                    // Subscribe first, then leave lobby, then announce arrival
-                    setupRoomListeners(privateChannel, false, mode);
-                    try { lobbyChannel.presence.leave(); } catch(e) {}
-                    try { matchmakingChannelRef.current?.unsubscribe(); } catch(e) {}
-                    try { matchmakingChannelRef.current?.presence.unsubscribe(); } catch(e) {}
-
-                    // Small delay so host's channel subscription is definitely up
-                    setTimeout(() => {
-                        if (!guestJoinSentRef.current && channelRef.current) {
-                            guestJoinSentRef.current = true;
-                            privateChannel.publish('action', { type: 'GUEST_READY', guestName: playerName });
-                        }
-                    }, 400);
-                });
             };
 
             const startMatchmaking = (mode) => {
                 cleanupChannels();
                 setMultiMode(mode);
                 multiModeRef.current = mode;
-                setIsHost(true);
-                isHostRef.current = true;
                 setGameState('MATCHMAKING');
 
-                // Use a fresh channel name to avoid ghost presence from old sessions
-                const lobbyChannel = ably.channels.get(`pkmn-lobby-${mode}-v4`);
+                const lobbyChannel = ably.channels.get(`pkmn-lobby-${mode}-v2`);
                 matchmakingChannelRef.current = lobbyChannel;
 
+                // WAJIB: attach dulu, baru akses presence
                 lobbyChannel.attach((attachErr) => {
                     if (attachErr) { setGameState('LOBBY_MAIN'); return; }
 
-                    // STRATEGY: 
-                    // 1) Subscribe to presence.enter FIRST (catches hosts that enter after us)
-                    // 2) Then do presence.get (catches hosts already waiting)
-                    // 3) If no host found after OBSERVE_WINDOW ms, become host ourselves
-
-                    const OBSERVE_WINDOW = 1200; // wait this long before committing to host role
-                    let observeTimer = null;
-                    let foundHost = false;
-
-                    // Step 1: Watch for any host that enters while we're observing
-                    lobbyChannel.presence.subscribe('enter', (member) => {
-                        if (member.clientId === globalClientId) return;
-                        if (member.data && member.data.roomId && !foundHost && !gameMatchedRef.current) {
-                            foundHost = true;
-                            if (observeTimer) { clearTimeout(observeTimer); observeTimer = null; }
-                            becomeGuest(lobbyChannel, member, mode);
-                        }
-                    });
-
-                    // Step 2: Check who's already waiting
                     lobbyChannel.presence.get((err, members) => {
-                        if (gameMatchedRef.current) return;
-                        const waitingHosts = (members || []).filter(m =>
-                            m.data && m.data.roomId && m.clientId !== globalClientId
-                        );
+                        const waitingHosts = (members || []).filter(m => m.data && m.data.roomId && m.clientId !== globalClientId);
 
-                        if (!err && waitingHosts.length > 0 && !foundHost) {
-                            foundHost = true;
-                            if (observeTimer) { clearTimeout(observeTimer); observeTimer = null; }
-                            becomeGuest(lobbyChannel, waitingHosts[0], mode);
-                            return;
-                        }
+                        if (err || waitingHosts.length === 0) {
+                            // === JADI HOST ===
+                            setIsHost(true);
+                            isHostRef.current = true;
+                            const newRoomId = Math.random().toString(36).substr(2, 8);
 
-                        // Step 3: No host found yet — wait a bit, then become host
-                        if (!foundHost) {
-                            observeTimer = setTimeout(() => {
-                                if (!foundHost && !gameMatchedRef.current) {
-                                    becomeHost(lobbyChannel, mode);
-                                }
-                            }, OBSERVE_WINDOW);
-                            matchmakingTimerRef.current = observeTimer;
+                            const privateChannel = ably.channels.get(`pkmn-room-${newRoomId}`);
+                            channelRef.current = privateChannel;
+
+                            privateChannel.attach((roomAttachErr) => {
+                                if (roomAttachErr) { setGameState('LOBBY_MAIN'); return; }
+
+                                setupRoomListeners(privateChannel, true, mode);
+
+                                lobbyChannel.presence.enter({ roomId: newRoomId, hostName: playerName }, (presErr) => {
+                                    if (presErr) console.error('Presence enter error:', presErr);
+                                });
+
+                                // Tunggu guest join — tidak perlu tindakan di sini, ditangani setupRoomListeners
+                                lobbyChannel.presence.subscribe('enter', (member) => {
+                                    if (member.clientId === globalClientId) return;
+                                });
+                            });
+
+                        } else {
+                            // === JADI GUEST ===
+                            setIsHost(false);
+                            isHostRef.current = false;
+                            const targetHost = waitingHosts[0];
+                            const targetRoom = targetHost.data.roomId;
+                            setOpponentName(targetHost.data.hostName || 'Lawan');
+
+                            const privateChannel = ably.channels.get(`pkmn-room-${targetRoom}`);
+                            channelRef.current = privateChannel;
+
+                            // attach room dulu sebelum publish GUEST_JOIN
+                            privateChannel.attach((roomAttachErr) => {
+                                if (roomAttachErr) { setGameState('LOBBY_MAIN'); return; }
+
+                                setupRoomListeners(privateChannel, false, mode);
+
+                                privateChannel.publish('action', { type: 'GUEST_JOIN', guestName: playerName });
+
+                                // Keluar dari lobby agar tidak diambil guest lain
+                                lobbyChannel.presence.leave();
+                            });
                         }
                     });
                 });
@@ -762,27 +721,22 @@
 
             const setupRoomListeners = (ch, amIHost, mode) => {
                 ch.unsubscribe('action');
+
                 ch.subscribe('action', (msg) => {
                     const data = msg.data;
 
-                    if (data.type === 'GUEST_READY' && amIHost) {
-                        if (!matchmakingChannelRef.current && gameMatchedRef.current) return; // already started
-                        gameMatchedRef.current = true;
+                    // Host terima GUEST_JOIN → generate board → kirim START_GAME_SYNC → mulai loading
+                    if (data.type === 'GUEST_JOIN' && amIHost) {
                         setOpponentName(data.guestName);
-                        // Clean up lobby
+                        // Keluar dari lobby agar tidak diambil guest lain
                         try { matchmakingChannelRef.current?.presence.leave(); } catch(e) {}
-                        try { matchmakingChannelRef.current?.unsubscribe(); } catch(e) {}
-                        try { matchmakingChannelRef.current?.presence.unsubscribe(); } catch(e) {}
-                        matchmakingChannelRef.current = null;
 
                         const newB = generateBoard();
-                        // Delay slightly so guest subscription is stable before message arrives
-                        setTimeout(() => {
-                            ch.publish('action', { type: 'START_GAME_SYNC', board: newB, mode, hostName: playerName });
-                        }, 200);
+                        ch.publish('action', { type: 'START_GAME_SYNC', board: newB, mode: mode, hostName: playerName });
                         prepareLevel(1, newB);
                     }
 
+                    // Guest terima START_GAME_SYNC → mulai loading dengan board yang sama
                     if (data.type === 'START_GAME_SYNC' && !amIHost) {
                         setMultiMode(data.mode);
                         multiModeRef.current = data.mode;
@@ -790,12 +744,13 @@
                         prepareLevel(1, data.board);
                     }
 
+                    // Guest selesai loading → host terima PLAYER_LOADED → cek apakah host juga sudah selesai
                     if (data.type === 'PLAYER_LOADED' && amIHost) {
                         hostLoadedCountRef.current += 1;
                         if (hostSelfLoadedRef.current) triggerSyncedStart();
                     }
 
-                    // Both players run countdown from identical absolute timestamp — true sync
+                    // Host kirim START_AT → guest jadwalkan countdown yang tersinkron
                     if (data.type === 'START_AT') runCountdownThenPlay(data.startAt);
 
                     if (data.type === 'VS_SCORE') setOpponentScore(s => s + data.delta);
@@ -820,24 +775,18 @@
                         multiModeRef.current = mode;
                         prepareLevel(1, data.board);
                     }
-                });
 
-                // Opponent disconnect — only trigger during active game
-                ch.presence.subscribe('leave', (member) => {
-                    if (member.clientId === globalClientId) return;
-                    setGameState(prev => {
-                        if (prev === 'PLAYING' || prev === 'COUNTDOWN' || prev === 'WAITING_BOTH_LOADED') {
-                            setConnectionStatus('opponent_left');
-                            return 'GAMEOVER';
-                        }
-                        return prev;
-                    });
+                    if (data.type === 'SYNC_REQUEST' && amIHost) {
+                        ch.publish('action', { type: 'SYNC_RESPONSE', board: boardRef.current });
+                    }
+                    if (data.type === 'SYNC_RESPONSE' && !amIHost) {
+                        setBoard(data.board);
+                    }
                 });
-
-                ch.presence.enter({ name: amIHost ? 'host' : 'guest' }).catch(e => console.warn('presence enter fail', e));
             };
 
             const cancelMatchmaking = () => {
+                cleanupChannels();
                 cleanupChannels();
                 setMultiMode('SINGLE');
                 multiModeRef.current = 'SINGLE';
@@ -901,7 +850,7 @@
                         if (isHostRef.current && multiModeRef.current !== 'SINGLE') {
                             channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: levelRef.current });
                         }
-                        prepareLevel(levelRef.current, newB); 
+                        prepareLevel(levelRef.current, newB);
                     } else {
                         triggerLevelEndStats(true);
                     }
