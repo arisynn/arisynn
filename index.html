@@ -206,9 +206,11 @@
             const channelRef = useRef(null);
             const matchmakingChannelRef = useRef(null);
             const boardRef = useRef(board);
-            // Untuk sinkronisasi loading multiplayer (diakses dari dalam listener closure)
-            const hostLoadedCountRef = useRef(0);  // jumlah PLAYER_LOADED dari lawan yang diterima
-            const hostSelfLoadedRef = useRef(false); // apakah host sendiri sudah selesai loading 
+            // Timestamp-based sync: host kirim waktu mulai absolut, kedua device hitung sendiri
+            const startAtRef = useRef(null);
+            // Tracking loading multiplayer
+            const hostLoadedCountRef = useRef(0);
+            const hostSelfLoadedRef = useRef(false);
             
             useEffect(() => { boardRef.current = board; }, [board]);
 
@@ -293,56 +295,73 @@
                 await preloadBoardImages(b);
 
                 if (multiMode === 'SINGLE') {
-                    // Single player: langsung countdown lalu main
-                    startCountdown(() => finalizeStart());
+                    runCountdownThenPlay(Date.now());
                 } else {
-                    // Multiplayer: broadcast bahwa kita sudah selesai loading
+                    // Sinyal ke lawan: kita sudah selesai loading
                     channelRef.current?.publish('action', { type: 'PLAYER_LOADED' });
+                    setGameState('WAITING_BOTH_LOADED');
 
                     if (isHost) {
-                        // Host track bahwa dirinya sendiri sudah selesai loading
-                        // Kalau lawan sudah kirim PLAYER_LOADED duluan, langsung broadcast BOTH_LOADED
                         hostSelfLoadedRef.current = true;
+                        // Kalau guest sudah loaded duluan, langsung mulai
                         if (hostLoadedCountRef.current >= 1) {
-                            hostLoadedCountRef.current = 0;
-                            hostSelfLoadedRef.current = false;
-                            channelRef.current?.publish('action', { type: 'BOTH_LOADED' });
+                            triggerSyncedStart();
                         }
                     }
-
-                    setGameState('WAITING_BOTH_LOADED');
+                    // Guest cukup tunggu — host yang akan kirim START_AT
                 }
             };
 
-            // Countdown 3-2-1-GO! lalu panggil callback
-            const startCountdown = (onDone) => {
-                setProgress(100);
-                setGameState('COUNTDOWN');
-                setCountdown(3);
-                let count = 3;
-                const tick = setInterval(() => {
-                    count--;
-                    if (count > 0) {
-                        setCountdown(count);
-                    } else if (count === 0) {
-                        setCountdown('GO!');
-                    } else {
-                        clearInterval(tick);
-                        setCountdown(null);
-                        onDone();
-                    }
-                }, 1000);
+            // Host memanggil ini saat kedua pemain sudah loaded
+            // Kirim timestamp absolut "mulai countdown" ke semua → semua hitung delay sendiri
+            const triggerSyncedStart = () => {
+                hostLoadedCountRef.current = 0;
+                hostSelfLoadedRef.current = false;
+                // Beri jeda 500ms agar pesan sampai ke guest sebelum countdown dimulai
+                const startAt = Date.now() + 500;
+                channelRef.current?.publish('action', { type: 'START_AT', startAt });
+                // Host juga jalankan sendiri berdasarkan timestamp yang sama
+                runCountdownThenPlay(startAt);
             };
 
+            // Jalankan countdown berdasarkan timestamp absolut (sama di semua device)
+            const runCountdownThenPlay = (startAt) => {
+                setProgress(100);
+                setGameState('COUNTDOWN');
+                // Angka countdown: 3 detik sebelum startAt, 2 detik, 1 detik, GO, lalu main
+                const steps = [
+                    { label: 3, offset: -3000 },
+                    { label: 2, offset: -2000 },
+                    { label: 1, offset: -1000 },
+                    { label: 'GO!', offset: 0 },
+                ];
+                steps.forEach(({ label, offset }) => {
+                    const delay = Math.max(0, (startAt + offset) - Date.now());
+                    setTimeout(() => setCountdown(label), delay);
+                });
+                const playDelay = Math.max(0, (startAt + 700) - Date.now()); // 700ms setelah GO!
+                setTimeout(() => {
+                    setCountdown(null);
+                    setSelectedTile(null);
+                    setMatchedTiles([]);
+                    setActivePath(null);
+                    setHintActiveTiles([]);
+                    isAnimating.current = false;
+                    statsRef.current = { myConnects: 0, allyConnects: 0, myTotalTime: 0, allyTotalTime: 0, lastActionTime: Date.now() };
+                    setGameState('PLAYING');
+                }, playDelay);
+            };
+
+            // finalizeStart masih dipakai untuk restart dari PAUSED dll
             const finalizeStart = () => {
+                setCountdown(null);
                 setSelectedTile(null);
                 setMatchedTiles([]);
                 setActivePath(null);
                 setHintActiveTiles([]);
                 isAnimating.current = false;
+                setProgress(100);
                 setGameState('PLAYING');
-                
-                // Reset statistik untuk level ini
                 statsRef.current = { myConnects: 0, allyConnects: 0, myTotalTime: 0, allyTotalTime: 0, lastActionTime: Date.now() };
             };
 
@@ -467,26 +486,22 @@
                         prepareLevel(1, data.board);
                     }
 
-                    // ---- SYNCHRONIZED LOADING SYSTEM ----
-                    // Keduanya kirim PLAYER_LOADED setelah selesai preload gambar.
-                    // Host yang jadi "gate": kalau sudah dapat 2 sinyal, broadcast BOTH_LOADED
-                    // yang memicu countdown di kedua sisi secara bersamaan.
-                    if (data.type === 'PLAYER_LOADED') {
-                        if (amIHost) {
-                            // Host tandai bahwa lawan sudah loaded
-                            hostLoadedCountRef.current = (hostLoadedCountRef.current || 0) + 1;
-                            // Cek apakah host sendiri juga sudah di state WAITING_BOTH_LOADED
-                            // (artinya host juga sudah selesai loading)
-                            if (hostLoadedCountRef.current >= 1 && hostSelfLoadedRef.current) {
-                                hostLoadedCountRef.current = 0;
-                                hostSelfLoadedRef.current = false;
-                                ch.publish('action', { type: 'BOTH_LOADED' });
-                            }
+                    // ---- TIMESTAMP-BASED SYNC SYSTEM ----
+                    // Guest kirim PLAYER_LOADED → host terima, cek apakah dirinya juga sudah loaded
+                    // Kalau iya → host publish START_AT (timestamp absolut)
+                    // Kedua device hitung delay sendiri → countdown mulai persis bersamaan
+                    if (data.type === 'PLAYER_LOADED' && amIHost) {
+                        hostLoadedCountRef.current += 1;
+                        if (hostSelfLoadedRef.current) {
+                            triggerSyncedStart();
                         }
+                        // Kalau host belum selesai loading, triggerSyncedStart()
+                        // akan dipanggil dari prepareLevel saat host selesai
                     }
 
-                    if (data.type === 'BOTH_LOADED') {
-                        startCountdown(() => finalizeStart());
+                    if (data.type === 'START_AT') {
+                        // Diterima oleh guest (dan host tidak terima karena echoMessages:false)
+                        runCountdownThenPlay(data.startAt);
                     }
 
                     if (data.type === 'VS_SCORE') setOpponentScore(data.score);
