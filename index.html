@@ -376,7 +376,7 @@
             const [opponentName, setOpponentName] = useState('');
             const [gameState, setGameState] = useState(playerName ? 'LOBBY_MAIN' : 'LOGIN'); 
             
-            // New States for Themes & Progress
+            // Themes & Progress
             const [activeTheme, setActiveTheme] = useState(() => localStorage.getItem('pkmnTheme') || 'pokemon');
             const [opponentProgress, setOpponentProgress] = useState(0);
             
@@ -388,6 +388,11 @@
             const [hints, setHints] = useState(3);
             const [shuffles, setShuffles] = useState(3);
             const [selectedTile, setSelectedTile] = useState(null);
+            
+            // --- SISTEM COMBO ---
+            const [comboUI, setComboUI] = useState(0); 
+            const comboCountRef = useRef(0);
+            const comboTimerRef = useRef(null);
             
             const [matchedTiles, setMatchedTiles] = useState([]); 
             const [hintActiveTiles, setHintActiveTiles] = useState([]); 
@@ -606,6 +611,10 @@
                     setScore(0); setHp(3); setHints(3); setShuffles(3); setOpponentScore(0);
                     setOpponentProgress(0);
                     setIsNewRecord(false);
+                    
+                    // Reset Combo
+                    comboCountRef.current = 0;
+                    setComboUI(0);
                 }
                 await preloadBoardImages(b, currentT);
                 
@@ -975,9 +984,23 @@
 
                     if (multiMode === 'COOP') channelRef.current?.publish('action', { type: 'COOP_MATCH', r1, c1, r2: r, c2: c, path });
                     
+                    // --- LOGIKA PENGHITUNGAN COMBO (BATAS 3 DETIK) ---
+                    comboCountRef.current += 1;
+                    setComboUI(comboCountRef.current);
+                    
+                    // Skor dasar 10. Jika combo 2 dapat 15, combo 3 dapat 20, dst.
+                    const earnedScore = 10 + (comboCountRef.current > 1 ? (comboCountRef.current - 1) * 5 : 0);
+                    
+                    if (comboTimerRef.current) clearTimeout(comboTimerRef.current);
+                    comboTimerRef.current = setTimeout(() => {
+                        comboCountRef.current = 0;
+                        setComboUI(0);
+                    }, 3000); 
+                    // -------------------------------------------------
+
                     // Kalkulasi progress lawan/sendiri yang akan dikirim via action
                     const predictedProg = Math.floor(((ROWS * COLS - (countRemaining(boardRef.current) - 2)) / (ROWS * COLS)) * 100);
-                    if (multiMode === 'VERSUS') channelRef.current?.publish('action', { type: 'VS_SCORE', delta: 10, progress: predictedProg });
+                    if (multiMode === 'VERSUS') channelRef.current?.publish('action', { type: 'VS_SCORE', delta: earnedScore, progress: predictedProg });
 
                     setShowTimerAdd(true);
                     setTimeout(() => setShowTimerAdd(false), 900);
@@ -989,7 +1012,7 @@
                         
                         setSelectedTile(null); setActivePath(null); setMatchedTiles([]); 
                         setScore(s => {
-                            const ns = s + 10;
+                            const ns = s + earnedScore;
                             const best = parseInt(localStorage.getItem('pkmnBestScore') || '0');
                             if (ns > best) {
                                 localStorage.setItem('pkmnBestScore', ns);
@@ -1005,6 +1028,12 @@
 
                 } else {
                     AudioEngine.wrong();
+                    
+                    // Jika salah, combo putus/ter-reset!
+                    comboCountRef.current = 0;
+                    setComboUI(0);
+                    if (comboTimerRef.current) clearTimeout(comboTimerRef.current);
+
                     setWrongTile({r, c});
                     setTimeout(() => setWrongTile(null), 380);
                     setSelectedTile({r, c});
@@ -1129,6 +1158,14 @@
                             <div className="flex justify-between items-center mt-0.5">
                                 <div className="text-xs sm:text-sm font-bold bg-white px-3 py-1 sm:px-4 sm:py-1.5 rounded-full text-pink-500 border border-pink-200 tracking-wide shadow-sm flex items-center gap-1.5">
                                     <span>Skor: {score}</span>
+                                    
+                                    {/* MUNCULKAN TEKS COMBO DISINI */}
+                                    {comboUI > 1 && (
+                                        <span className="text-[10px] sm:text-xs text-orange-500 font-black border-l border-pink-200 pl-1.5 animate-pulse">
+                                            {comboUI}x Combo!
+                                        </span>
+                                    )}
+                                    
                                     <span className="text-[10px] sm:text-xs text-purple-400 border-l border-pink-200 pl-1.5" title="Progress Kamu">{myProgressPercent}%</span>
                                 </div>
                                 <div className="flex gap-1.5 sm:gap-2 items-center">
