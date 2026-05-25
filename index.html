@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="id">
 <head>
@@ -666,6 +665,61 @@
                         if (hostLoadedCountRef.current >= 1) triggerSyncedStart();
                     }
                 }
+            };
+
+            const triggerSyncedStart = () => {
+                hostLoadedCountRef.current = 0;
+                hostSelfLoadedRef.current = false;
+                const startAt = Date.now() + 4200;
+                channelRef.current?.publish('action', { type: 'START_AT', startAt });
+                runCountdownThenPlay(startAt);
+            };
+
+            const runCountdownThenPlay = (startAt) => {
+                setProgress(100);
+                setGameState('COUNTDOWN');
+                const steps = [
+                    { label: 3, offset: -3000 },
+                    { label: 2, offset: -2000 },
+                    { label: 1, offset: -1000 },
+                    { label: 'GO!', offset: 0 },
+                ];
+                steps.forEach(({ label, offset }) => {
+                    const delay = Math.max(0, (startAt + offset) - Date.now());
+                    setTimeout(() => {
+                        setCountdown(label);
+                        AudioEngine.tick(label);
+                    }, delay);
+                });
+                const playDelay = Math.max(0, (startAt + 700) - Date.now());
+                setTimeout(() => {
+                    setCountdown(null);
+                    setSelectedTile(null);
+                    setMatchedTiles([]);
+                    matchedTilesRef.current = [];
+                    setActivePath(null);
+                    setHintActiveTiles([]);
+                    statsRef.current = { myConnects: 0, allyConnects: 0, myTotalTime: 0, allyTotalTime: 0, lastActionTime: Date.now() };
+                    setGameState('PLAYING');
+                }, playDelay);
+            };
+
+            const cleanupChannels = () => {
+                if (matchmakingChannelRef.current) {
+                    try { matchmakingChannelRef.current.presence.leave(); } catch(e) {}
+                    try { matchmakingChannelRef.current.unsubscribe(); } catch(e) {}
+                    try { matchmakingChannelRef.current.presence.unsubscribe(); } catch(e) {}
+                    matchmakingChannelRef.current = null;
+                }
+                if (channelRef.current) {
+                    try { channelRef.current.unsubscribe(); } catch(e) {}
+                    try { channelRef.current.presence.leave(); } catch(e) {}
+                    try { channelRef.current.presence.unsubscribe(); } catch(e) {}
+                    channelRef.current = null;
+                }
+                hostLoadedCountRef.current = 0;
+                hostSelfLoadedRef.current = false;
+                setConnectionStatus('connected');
             };
 
             const startMatchmaking = (mode) => {
