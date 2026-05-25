@@ -748,7 +748,14 @@
                         setMultiMode(data.mode);
                         multiModeRef.current = data.mode;
                         setOpponentName(data.hostName);
-                        prepareLevel(1, data.board, data.theme);
+                        
+                        // SYNC THEME HANYA UNTUK CO-OP. VERSUS PAKAI TEMA MASING-MASING!
+                        if (data.mode === 'COOP') {
+                            prepareLevel(1, data.board, data.theme);
+                        } else {
+                            // Versus: generate papan mandiri dengan tema lokal Guest
+                            prepareLevel(1, null, activeThemeRef.current);
+                        }
                     }
 
                     if (data.type === 'PLAYER_LOADED' && amIHost) {
@@ -783,6 +790,12 @@
                         setMultiMode(mode);
                         multiModeRef.current = mode;
                         prepareLevel(1, data.board, data.theme);
+                    }
+                    
+                    if (data.type === 'REMATCH_VERSUS' && !amIHost) {
+                        setMultiMode(mode);
+                        multiModeRef.current = mode;
+                        prepareLevel(1, null, activeThemeRef.current); // Generate ulang mandiri
                     }
 
                     if (data.type === 'SYNC_REQUEST' && amIHost) {
@@ -837,9 +850,7 @@
                 if (!isGameOver && multiModeRef.current !== 'COOP') {
                     setTimeout(() => {
                         const newB = generateBoard(activeThemeRef.current);
-                        if (isHostRef.current && multiModeRef.current !== 'SINGLE') {
-                            channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: level + 1, theme: activeThemeRef.current });
-                        }
+                        // Tidak ada SYNC_NEXT_LEVEL untuk Versus karena independen
                         prepareLevel(level + 1, newB, activeThemeRef.current);
                     }, 2500);
                 }
@@ -852,9 +863,9 @@
                     setShowTimeoutFlash(false);
                     if (hp > 1) {
                         setHp(h => h - 1);
-                        if (multiModeRef.current !== 'SINGLE' && !isHostRef.current) return;
+                        if (multiModeRef.current === 'COOP' && !isHostRef.current) return;
                         const newB = generateBoard(activeThemeRef.current);
-                        if (isHostRef.current && multiModeRef.current !== 'SINGLE') {
+                        if (multiModeRef.current === 'COOP' && isHostRef.current) {
                             channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: levelRef.current, theme: activeThemeRef.current });
                         }
                         prepareLevel(levelRef.current, newB, activeThemeRef.current);
@@ -1003,7 +1014,11 @@
             const handleRematch = () => {
                 if (isHost) {
                     const newB = generateBoard(activeThemeRef.current);
-                    channelRef.current?.publish('action', { type: 'REMATCH_SYNC', board: newB, theme: activeThemeRef.current });
+                    if (multiModeRef.current === 'COOP') {
+                        channelRef.current?.publish('action', { type: 'REMATCH_SYNC', board: newB, theme: activeThemeRef.current });
+                    } else {
+                        channelRef.current?.publish('action', { type: 'REMATCH_VERSUS' });
+                    }
                     prepareLevel(1, newB, activeThemeRef.current);
                 } else {
                     cleanupChannels();
@@ -1222,7 +1237,7 @@
 
                         {gameState === 'LOBBY_MAIN' && (
                             <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
-                                <h1 className="text-4xl font-black text-pink-500 mb-1 drop-shadow-sm text-center">TETRIS<br/>CONNECT</h1>
+                                <h1 className="text-4xl font-black text-pink-500 mb-1 drop-shadow-sm text-center">POKEMON<br/>CONNECT</h1>
                                 <h2 className="text-lg font-bold text-purple-400 mb-2">Halo, {playerName}!</h2>
                                 {(() => { const best = parseInt(localStorage.getItem('pkmnBestScore') || '0'); return best > 0 ? <p className="text-sm text-pink-300 font-bold mb-4">Best Score: {best}</p> : <div className="mb-4"></div>; })()}
                                 
@@ -1236,7 +1251,11 @@
                                                 onClick={() => { setActiveTheme(key); localStorage.setItem('pkmnTheme', key); }}
                                                 className={`p-2 rounded-xl border-[3px] transition-all flex flex-col items-center justify-center w-16 h-16 ${activeTheme === key ? 'bg-pink-100 border-pink-400 scale-105 shadow-md' : 'bg-white border-pink-100 hover:bg-pink-50'}`}
                                             >
-                                                <span className="text-2xl leading-none mb-1">{key === 'pokemon' ? '🐣' : t.data[0]}</span>
+                                                {key === 'pokemon' ? (
+                                                    <img src="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/poke-ball.png" alt="pokeball" className="w-8 h-8 object-contain mb-1" style={{ imageRendering: 'pixelated' }} />
+                                                ) : (
+                                                    <span className="text-2xl leading-none mb-1">{t.data[0]}</span>
+                                                )}
                                                 <span className="text-[8px] font-bold text-gray-500 uppercase">{t.name}</span>
                                             </button>
                                         ))}
