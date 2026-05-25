@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="id">
 <head>
@@ -165,6 +166,14 @@
             825, 827, 829, 846, 850, 854, 856, 872, 874, 877, 888, 906, 909, 912, 915, 917, 921, 925, 938, 946
         ];
 
+        // ===================== THEMES DATA =====================
+        const THEMES = {
+            pokemon: { name: 'Pokémon', data: ALL_CUTE_POKEMON, type: 'image' },
+            fruits: { name: 'Buah', data: ['🍏','🍎','🍐','🍊','🍋','🍌','🍉','🍇','🍓','🫐','🍈','🍒','🍑','🥭','🍍','🥥','🥝','🍅'], type: 'emoji' },
+            vegetables: { name: 'Sayuran', data: ['🥑','🍆','🥔','🥕','🌽','🌶️','🫑','🥒','🥬','🥦','🧄','🧅','🍄','🥜','🌰','🫘'], type: 'emoji' },
+            animals: { name: 'Hewan', data: ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐻‍❄️','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🐤','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🐛','🦋','🐌','🐞','🐜','🦟','🐢','🐍','🦎','🦖','🦕','🐙','🦑','🦐','🦞','🦀','🐡','🐠','🐟','🐬','🐳'], type: 'emoji' }
+        };
+
         // ===================== WEB AUDIO ENGINE =====================
         const AudioEngine = (() => {
             let ctx = null;
@@ -297,15 +306,19 @@
             return null;
         };
 
-        // ===================== TIMER CALC =====================
-        // Speed: 0.05 + (level * 0.02) per 200ms tick
-        // Level 1: 0.07/200ms = 0.35/s → 100/0.35 ≈ 286s (4.7 menit) — nah ini terlalu banyak
-        // Adjusted: 0.08 + (level * 0.025) per 200ms
-        // Level 1: 0.105/200ms → 100/0.525 ≈ 190s
-        // Level 5: 0.205/200ms → 100/1.025 ≈ 97s
-        // Level 10: 0.33/200ms → 100/1.65 ≈ 61s — lebih balanced
-        const getTimerSpeed = (level) => 0.08 + (level * 0.025);
+        const countRemaining = (b) => {
+            let count = 0;
+            if (!b || b.length === 0) return 0;
+            for (let r = 1; r <= ROWS; r++) {
+                for (let c = 1; c <= COLS; c++) {
+                    if (b[r][c] !== 0) count++;
+                }
+            }
+            return count;
+        };
 
+        // ===================== TIMER CALC =====================
+        const getTimerSpeed = (level) => 0.08 + (level * 0.025);
         const getSecondsLeft = (progress, level) => {
             const speed = getTimerSpeed(level);
             const ticksLeft = progress / speed;
@@ -363,6 +376,10 @@
             const [opponentName, setOpponentName] = useState('');
             const [gameState, setGameState] = useState(playerName ? 'LOBBY_MAIN' : 'LOGIN'); 
             
+            // New States for Themes & Progress
+            const [activeTheme, setActiveTheme] = useState(() => localStorage.getItem('pkmnTheme') || 'pokemon');
+            const [opponentProgress, setOpponentProgress] = useState(0);
+            
             const [board, setBoard] = useState([]);
             const [level, setLevel] = useState(1);
             const [score, setScore] = useState(0);
@@ -409,15 +426,14 @@
             const levelRef = useRef(1);
             const isHostRef = useRef(true);
             const multiModeRef = useRef('SINGLE');
-
-
-
+            const activeThemeRef = useRef(activeTheme);
 
             useEffect(() => { boardRef.current = board; }, [board]);
             useEffect(() => { progressRef.current = progress; }, [progress]);
             useEffect(() => { levelRef.current = level; }, [level]);
             useEffect(() => { isHostRef.current = isHost; }, [isHost]);
             useEffect(() => { multiModeRef.current = multiMode; }, [multiMode]);
+            useEffect(() => { activeThemeRef.current = activeTheme; }, [activeTheme]);
 
             // Mute toggle
             useEffect(() => {
@@ -425,11 +441,17 @@
                 localStorage.setItem('pkmnMuted', isMuted);
             }, [isMuted]);
 
+            // Calculate my Progress Percent dynamically
+            const myProgressPercent = (() => {
+                if (board.length === 0) return 0;
+                const total = ROWS * COLS;
+                return Math.floor(((total - countRemaining(board)) / total) * 100);
+            })();
+
             // Monitor koneksi Ably
             useEffect(() => {
                 ably.connection.on('connected', () => {
                     setConnectionStatus('connected');
-                    // On reconnect during a game, guest requests latest board state
                     if (channelRef.current && !isHostRef.current) {
                         channelRef.current.publish('action', { type: 'SYNC_REQUEST' });
                     }
@@ -440,7 +462,7 @@
                 return () => ably.connection.off();
             }, []);
 
-            // Deadlock auto-detection every 3 seconds
+            // Deadlock auto-detection
             useEffect(() => {
                 if (deadlockCheckRef.current) clearInterval(deadlockCheckRef.current);
                 if (gameState !== 'PLAYING') return;
@@ -448,7 +470,6 @@
                     const b = boardRef.current;
                     if (!b || b.length === 0) return;
                     if (!findHint(b)) {
-                        // Deadlock! Auto-shuffle
                         if (multiMode === 'COOP' && !isHost) return;
                         const newB = guaranteedShuffle(b);
                         setBoard(newB);
@@ -470,10 +491,17 @@
                 }
             };
 
-            const generateBoard = useCallback(() => {
+            const generateBoard = useCallback((themeKey = activeThemeRef.current) => {
                 const newBoard = Array.from({ length: ROWS + 2 }, () => Array(COLS + 2).fill(0));
-                let shuffledPool = [...ALL_CUTE_POKEMON].sort(() => Math.random() - 0.5);
-                let selectedIds = shuffledPool.slice(0, (ROWS * COLS) / 4); 
+                const themeData = THEMES[themeKey].data;
+                
+                let selectedIds = [];
+                const requiredPairs = (ROWS * COLS) / 4;
+                while (selectedIds.length < requiredPairs) {
+                    let shuffled = [...themeData].sort(() => Math.random() - 0.5);
+                    selectedIds.push(...shuffled);
+                }
+                selectedIds = selectedIds.slice(0, requiredPairs);
 
                 let tiles = [];
                 selectedIds.forEach(id => { tiles.push(id, id, id, id); });
@@ -496,7 +524,6 @@
                 return newBoard;
             }, []);
 
-            // Guaranteed shuffle — no 20-attempt limit
             const guaranteedShuffle = (currentBoard) => {
                 let tiles = []; let pos = [];
                 for (let r = 1; r <= ROWS; r++) {
@@ -507,31 +534,40 @@
                 if (tiles.length === 0) return currentBoard;
                 let newB = [...currentBoard.map(row => [...row])];
                 
-                // Try up to 50 random shuffles
                 for (let attempt = 0; attempt < 50; attempt++) {
                     tiles.sort(() => Math.random() - 0.5);
                     for (let i = 0; i < pos.length; i++) { newB[pos[i].r][pos[i].c] = tiles[i]; }
                     if (findHint(newB)) return newB;
                 }
                 
-                // Forced fallback: pair first two tiles that share same id and move them to adjacent corners
                 for (let i = 0; i < tiles.length; i++) {
                     for (let j = i + 1; j < tiles.length; j++) {
                         if (tiles[i] === tiles[j]) {
-                            // Place them at border-adjacent positions
                             newB[pos[0].r][pos[0].c] = tiles[i];
                             newB[pos[1].r][pos[1].c] = tiles[j];
                             if (findHint(newB)) return newB;
                         }
                     }
                 }
-                return newB; // last resort, return as-is
+                return newB; 
             };
 
-            // --- PRE-LOAD IMAGES ---
-            const preloadBoardImages = async (boardData) => {
+            const preloadBoardImages = async (boardData, themeKey) => {
                 setGameState('LOADING_BOARD');
                 setProgress(0); 
+
+                if (THEMES[themeKey].type === 'emoji') {
+                    // Animasi loading cepat untuk emoji
+                    let p = 0;
+                    const interval = setInterval(() => {
+                        p += 25;
+                        setProgress(p);
+                    }, 100);
+                    await new Promise(r => setTimeout(r, 500));
+                    clearInterval(interval);
+                    setProgress(100);
+                    return;
+                }
 
                 const uniqueIds = new Set();
                 for(let r = 1; r <= ROWS; r++) {
@@ -555,16 +591,24 @@
                 await Promise.race([Promise.all(loadPromises), timeoutPromise]);
             };
 
-            const prepareLevel = async (startLevel = 1, providedBoard = null) => {
-                const b = providedBoard || generateBoard();
+            const prepareLevel = async (startLevel = 1, providedBoard = null, providedTheme = null) => {
+                const currentT = providedTheme || activeThemeRef.current;
+                if (providedTheme) {
+                    setActiveTheme(providedTheme);
+                    activeThemeRef.current = providedTheme;
+                }
+                
+                const b = providedBoard || generateBoard(currentT);
                 setBoard(b);
                 setLevel(startLevel);
                 levelRef.current = startLevel;
                 if (startLevel === 1) {
                     setScore(0); setHp(3); setHints(3); setShuffles(3); setOpponentScore(0);
+                    setOpponentProgress(0);
                     setIsNewRecord(false);
                 }
-                await preloadBoardImages(b);
+                await preloadBoardImages(b, currentT);
+                
                 if (multiModeRef.current === 'SINGLE') {
                     runCountdownThenPlay(Date.now() + 3700);
                 } else {
@@ -580,7 +624,6 @@
             const triggerSyncedStart = () => {
                 hostLoadedCountRef.current = 0;
                 hostSelfLoadedRef.current = false;
-                // Set startAt far enough that both players can receive and schedule their countdowns
                 const startAt = Date.now() + 4200;
                 channelRef.current?.publish('action', { type: 'START_AT', startAt });
                 runCountdownThenPlay(startAt);
@@ -615,24 +658,6 @@
                 }, playDelay);
             };
 
-            const finalizeStart = () => {
-                setCountdown(null);
-                setSelectedTile(null);
-                setMatchedTiles([]);
-                setActivePath(null);
-                setHintActiveTiles([]);
-                isAnimating.current = false;
-                setProgress(100);
-                setGameState('PLAYING');
-                statsRef.current = { myConnects: 0, allyConnects: 0, myTotalTime: 0, allyTotalTime: 0, lastActionTime: Date.now() };
-            };
-
-            // ===================== MATCHMAKING =====================
-            // Sistem dari v2 — terbukti work 100%
-            // Host tunggu di lobby, guest langsung join ke room host.
-            // Flow: attach lobby → get members → jika ada host: jadi guest → attach room → kirim GUEST_JOIN
-            //                                 → jika kosong: jadi host → buat room → masuk lobby presence → tunggu GUEST_JOIN
-
             const cleanupChannels = () => {
                 if (matchmakingChannelRef.current) {
                     try { matchmakingChannelRef.current.presence.leave(); } catch(e) {}
@@ -661,7 +686,6 @@
                 const lobbyChannel = ably.channels.get(`pkmn-lobby-${mode}-v2`);
                 matchmakingChannelRef.current = lobbyChannel;
 
-                // WAJIB: attach dulu, baru akses presence
                 lobbyChannel.attach((attachErr) => {
                     if (attachErr) { setGameState('LOBBY_MAIN'); return; }
 
@@ -669,31 +693,23 @@
                         const waitingHosts = (members || []).filter(m => m.data && m.data.roomId && m.clientId !== globalClientId);
 
                         if (err || waitingHosts.length === 0) {
-                            // === JADI HOST ===
+                            // JADI HOST
                             setIsHost(true);
                             isHostRef.current = true;
                             const newRoomId = Math.random().toString(36).substr(2, 8);
-
                             const privateChannel = ably.channels.get(`pkmn-room-${newRoomId}`);
                             channelRef.current = privateChannel;
 
                             privateChannel.attach((roomAttachErr) => {
                                 if (roomAttachErr) { setGameState('LOBBY_MAIN'); return; }
-
                                 setupRoomListeners(privateChannel, true, mode);
-
-                                lobbyChannel.presence.enter({ roomId: newRoomId, hostName: playerName }, (presErr) => {
-                                    if (presErr) console.error('Presence enter error:', presErr);
-                                });
-
-                                // Tunggu guest join — tidak perlu tindakan di sini, ditangani setupRoomListeners
+                                lobbyChannel.presence.enter({ roomId: newRoomId, hostName: playerName }, (presErr) => {});
                                 lobbyChannel.presence.subscribe('enter', (member) => {
                                     if (member.clientId === globalClientId) return;
                                 });
                             });
-
                         } else {
-                            // === JADI GUEST ===
+                            // JADI GUEST
                             setIsHost(false);
                             isHostRef.current = false;
                             const targetHost = waitingHosts[0];
@@ -703,15 +719,10 @@
                             const privateChannel = ably.channels.get(`pkmn-room-${targetRoom}`);
                             channelRef.current = privateChannel;
 
-                            // attach room dulu sebelum publish GUEST_JOIN
                             privateChannel.attach((roomAttachErr) => {
                                 if (roomAttachErr) { setGameState('LOBBY_MAIN'); return; }
-
                                 setupRoomListeners(privateChannel, false, mode);
-
                                 privateChannel.publish('action', { type: 'GUEST_JOIN', guestName: playerName });
-
-                                // Keluar dari lobby agar tidak diambil guest lain
                                 lobbyChannel.presence.leave();
                             });
                         }
@@ -721,44 +732,42 @@
 
             const setupRoomListeners = (ch, amIHost, mode) => {
                 ch.unsubscribe('action');
-
                 ch.subscribe('action', (msg) => {
                     const data = msg.data;
 
-                    // Host terima GUEST_JOIN → generate board → kirim START_GAME_SYNC → mulai loading
                     if (data.type === 'GUEST_JOIN' && amIHost) {
                         setOpponentName(data.guestName);
-                        // Keluar dari lobby agar tidak diambil guest lain
                         try { matchmakingChannelRef.current?.presence.leave(); } catch(e) {}
 
-                        const newB = generateBoard();
-                        ch.publish('action', { type: 'START_GAME_SYNC', board: newB, mode: mode, hostName: playerName });
-                        prepareLevel(1, newB);
+                        const newB = generateBoard(activeThemeRef.current);
+                        ch.publish('action', { type: 'START_GAME_SYNC', board: newB, mode: mode, hostName: playerName, theme: activeThemeRef.current });
+                        prepareLevel(1, newB, activeThemeRef.current);
                     }
 
-                    // Guest terima START_GAME_SYNC → mulai loading dengan board yang sama
                     if (data.type === 'START_GAME_SYNC' && !amIHost) {
                         setMultiMode(data.mode);
                         multiModeRef.current = data.mode;
                         setOpponentName(data.hostName);
-                        prepareLevel(1, data.board);
+                        prepareLevel(1, data.board, data.theme);
                     }
 
-                    // Guest selesai loading → host terima PLAYER_LOADED → cek apakah host juga sudah selesai
                     if (data.type === 'PLAYER_LOADED' && amIHost) {
                         hostLoadedCountRef.current += 1;
                         if (hostSelfLoadedRef.current) triggerSyncedStart();
                     }
 
-                    // Host kirim START_AT → guest jadwalkan countdown yang tersinkron
                     if (data.type === 'START_AT') runCountdownThenPlay(data.startAt);
 
-                    if (data.type === 'VS_SCORE') setOpponentScore(s => s + data.delta);
+                    if (data.type === 'VS_SCORE') {
+                        setOpponentScore(s => s + data.delta);
+                        if (data.progress !== undefined) setOpponentProgress(data.progress);
+                    }
+                    
                     if (data.type === 'COOP_MATCH') handleRemoteMatch(data.r1, data.c1, data.r2, data.c2, data.path);
 
                     if (data.type === 'NEXT_LEVEL_SYNC' && !amIHost) {
                         setProgress(100);
-                        prepareLevel(data.level, data.board);
+                        prepareLevel(data.level, data.board, data.theme);
                     }
 
                     if (data.type === 'SYNC_SHUFFLE' && !amIHost) setBoard(data.board);
@@ -773,7 +782,7 @@
                     if (data.type === 'REMATCH_SYNC' && !amIHost) {
                         setMultiMode(mode);
                         multiModeRef.current = mode;
-                        prepareLevel(1, data.board);
+                        prepareLevel(1, data.board, data.theme);
                     }
 
                     if (data.type === 'SYNC_REQUEST' && amIHost) {
@@ -786,7 +795,6 @@
             };
 
             const cancelMatchmaking = () => {
-                cleanupChannels();
                 cleanupChannels();
                 setMultiMode('SINGLE');
                 multiModeRef.current = 'SINGLE';
@@ -818,7 +826,6 @@
                     AudioEngine.gameOver();
                     setGameState('GAMEOVER');
                 } else {
-                    // Board clear flash before WON
                     AudioEngine.levelClear();
                     setShowBoardClear(true);
                     setTimeout(() => {
@@ -829,11 +836,11 @@
 
                 if (!isGameOver && multiModeRef.current !== 'COOP') {
                     setTimeout(() => {
-                        const newB = generateBoard();
+                        const newB = generateBoard(activeThemeRef.current);
                         if (isHostRef.current && multiModeRef.current !== 'SINGLE') {
-                            channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: level + 1 });
+                            channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: level + 1, theme: activeThemeRef.current });
                         }
-                        prepareLevel(level + 1, newB);
+                        prepareLevel(level + 1, newB, activeThemeRef.current);
                     }, 2500);
                 }
             };
@@ -846,29 +853,26 @@
                     if (hp > 1) {
                         setHp(h => h - 1);
                         if (multiModeRef.current !== 'SINGLE' && !isHostRef.current) return;
-                        const newB = generateBoard();
+                        const newB = generateBoard(activeThemeRef.current);
                         if (isHostRef.current && multiModeRef.current !== 'SINGLE') {
-                            channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: levelRef.current });
+                            channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: levelRef.current, theme: activeThemeRef.current });
                         }
-                        prepareLevel(levelRef.current, newB);
+                        prepareLevel(levelRef.current, newB, activeThemeRef.current);
                     } else {
                         triggerLevelEndStats(true);
                     }
                 }, 1000);
             };
 
-            const performShuffle = (currentBoard) => guaranteedShuffle(currentBoard);
-
             const handleShuffleClick = () => {
                 if (shuffles > 0 && gameState === 'PLAYING' && !isAnimating.current) {
                     if (multiMode === 'COOP' && !isHost) {
-                        // Guest request shuffle ke host
                         channelRef.current?.publish('action', { type: 'REQUEST_SHUFFLE' });
                         return;
                     }
                     setShuffles(s => s - 1);
                     AudioEngine.shuffle();
-                    const newB = performShuffle(board);
+                    const newB = guaranteedShuffle(board);
                     setBoard(newB);
                     setSelectedTile(null);
                     if (multiMode === 'COOP' && isHost) channelRef.current?.publish('action', { type: 'SYNC_SHUFFLE', board: newB });
@@ -888,11 +892,7 @@
             };
 
             const checkLevelComplete = (b) => {
-                let empty = true;
-                for (let r = 1; r <= ROWS; r++) {
-                    for (let c = 1; c <= COLS; c++) { if (b[r][c] !== 0) empty = false; }
-                }
-                if (empty) {
+                if (countRemaining(b) === 0) {
                     triggerLevelEndStats(false);
                     return true;
                 }
@@ -963,9 +963,11 @@
                     statsRef.current.lastActionTime = now;
 
                     if (multiMode === 'COOP') channelRef.current?.publish('action', { type: 'COOP_MATCH', r1, c1, r2: r, c2: c, path });
-                    if (multiMode === 'VERSUS') channelRef.current?.publish('action', { type: 'VS_SCORE', delta: 10 });
+                    
+                    // Kalkulasi progress lawan/sendiri yang akan dikirim via action
+                    const predictedProg = Math.floor(((ROWS * COLS - (countRemaining(boardRef.current) - 2)) / (ROWS * COLS)) * 100);
+                    if (multiMode === 'VERSUS') channelRef.current?.publish('action', { type: 'VS_SCORE', delta: 10, progress: predictedProg });
 
-                    // Timer add feedback
                     setShowTimerAdd(true);
                     setTimeout(() => setShowTimerAdd(false), 900);
 
@@ -1000,12 +1002,10 @@
 
             const handleRematch = () => {
                 if (isHost) {
-                    const newB = generateBoard();
-                    channelRef.current?.publish('action', { type: 'REMATCH_SYNC', board: newB });
-                    prepareLevel(1, newB);
+                    const newB = generateBoard(activeThemeRef.current);
+                    channelRef.current?.publish('action', { type: 'REMATCH_SYNC', board: newB, theme: activeThemeRef.current });
+                    prepareLevel(1, newB, activeThemeRef.current);
                 } else {
-                    // Guest menunggu host rematch — bisa tampilkan waiting state
-                    // Untuk sekarang: kembali ke lobby
                     cleanupChannels();
                     setMultiMode('SINGLE');
                     setGameState('LOBBY_MAIN');
@@ -1059,9 +1059,9 @@
                         <button onClick={() => { cleanupChannels(); setMultiMode('SINGLE'); setGameState('LOBBY_MAIN'); }} className="cute-btn-text w-full py-3 text-lg font-bold bg-gradient-to-r from-red-400 to-pink-500">Keluar ke Menu</button>
                     ) : isHost ? (
                         <button onClick={() => {
-                            const newB = generateBoard();
-                            channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: level + 1 });
-                            prepareLevel(level + 1, newB);
+                            const newB = generateBoard(activeThemeRef.current);
+                            channelRef.current?.publish('action', { type: 'NEXT_LEVEL_SYNC', board: newB, level: level + 1, theme: activeThemeRef.current });
+                            prepareLevel(level + 1, newB, activeThemeRef.current);
                         }} className="cute-btn-text w-full py-3 text-lg font-bold bg-gradient-to-r from-teal-400 to-emerald-400">Lanjut Level {level + 1}</button>
                     ) : (
                         <div className="flex flex-col items-center">
@@ -1072,8 +1072,8 @@
                 </div>
             );
 
-            // Seconds left display
             const secondsLeft = getSecondsLeft(progress, level);
+            const loadingText = THEMES[activeTheme].type === 'image' ? 'Memuat Pokémon...' : 'Memuat Tema...';
 
             return (
                 <div className="w-full h-[100dvh] bg-pink-100 flex items-center justify-center p-1 sm:p-2">
@@ -1087,7 +1087,10 @@
                                         {multiMode === 'COOP' ? `Partner: ${opponentName}` : `${playerName} vs ${opponentName}`}
                                     </span>
                                     {multiMode === 'VERSUS' && (
-                                        <span className="text-red-500 bg-red-50 px-2 py-0.5 rounded-full border border-red-100">Lawan: {opponentScore}</span>
+                                        <span className="text-red-500 bg-red-50 px-2 py-0.5 rounded-full border border-red-100 flex items-center gap-1.5">
+                                            <span>Lawan: {opponentScore}</span>
+                                            <span className="text-[10px] sm:text-xs text-orange-500 border-l border-red-200 pl-1.5" title="Progress Lawan">{opponentProgress}%</span>
+                                        </span>
                                     )}
                                 </div>
                             )}
@@ -1096,7 +1099,6 @@
                                     <IconHeart /><span className="ml-1 text-xs sm:text-sm font-bold text-pink-500">{hp}</span>
                                 </div>
                                 <div className="text-lg sm:text-xl font-bold text-pink-500 flex items-center gap-1">Level {level}</div>
-                                {/* Timer bar with seconds label */}
                                 <div className="flex items-center gap-1">
                                     <span className="text-[10px] font-bold text-gray-400 w-6 text-right">{secondsLeft}s</span>
                                     <div className="w-[80px] sm:w-[100px] bg-white rounded-full h-3 sm:h-4 p-[2px] shadow-inner border border-pink-200 relative overflow-hidden">
@@ -1104,15 +1106,15 @@
                                             style={{ width: `${progress}%`, backgroundImage: progress > 50 ? 'linear-gradient(to right, #a78bfa, #f472b6)' : progress > 25 ? 'linear-gradient(to right, #fde047, #f59e0b)' : 'linear-gradient(to right, #fca5a5, #ef4444)' }}
                                         />
                                     </div>
-                                    {/* Timer add float text */}
                                     {showTimerAdd && (
                                         <span className="absolute right-[85px] top-[28px] text-[10px] font-black text-emerald-500 float-text z-[60]">+waktu</span>
                                     )}
                                 </div>
                             </div>
                             <div className="flex justify-between items-center mt-0.5">
-                                <div className="text-xs sm:text-sm font-bold bg-white px-3 py-1 sm:px-4 sm:py-1.5 rounded-full text-pink-500 border border-pink-200 tracking-wide shadow-sm">
-                                    Skor: {score}
+                                <div className="text-xs sm:text-sm font-bold bg-white px-3 py-1 sm:px-4 sm:py-1.5 rounded-full text-pink-500 border border-pink-200 tracking-wide shadow-sm flex items-center gap-1.5">
+                                    <span>Skor: {score}</span>
+                                    <span className="text-[10px] sm:text-xs text-purple-400 border-l border-pink-200 pl-1.5" title="Progress Kamu">{myProgressPercent}%</span>
                                 </div>
                                 <div className="flex gap-1.5 sm:gap-2 items-center">
                                     <button onClick={handleHintClick} className="cute-button w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center relative shadow-sm"><IconSearch /><span className="absolute -top-1 -right-1 bg-pink-500 text-white text-[9px] sm:text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{hints}</span></button>
@@ -1125,8 +1127,7 @@
                                     </button>
                                 </div>
                             </div>
-                            {/* Timer hint subtitle */}
-                            <p className="text-[9px] text-center text-gray-300 font-bold -mt-0.5">+waktu tiap connect Pokémon</p>
+                            <p className="text-[9px] text-center text-gray-300 font-bold -mt-0.5">+waktu tiap connect tile</p>
                         </div>
 
                         {/* ===================== GRID BODY ===================== */}
@@ -1142,10 +1143,8 @@
                                         )}
                                     </svg>
 
-                                    {/* Grid: only render inner COLS x ROWS (no border cells in DOM) */}
                                     <div className="absolute inset-0 grid" style={{ zIndex: 20, gridTemplateColumns: `repeat(${COLS + 2}, 1fr)`, gridTemplateRows: `repeat(${ROWS + 2}, 1fr)`, gap: '0px' }}>
                                         {board.map((row, r) => row.map((cellId, c) => {
-                                            // Border cells: invisible spacer for connect-line routing
                                             if (r === 0 || r === ROWS + 1 || c === 0 || c === COLS + 1) {
                                                 return <div key={`${r}-${c}`} className="w-full h-full pointer-events-none" />;
                                             }
@@ -1156,6 +1155,8 @@
                                             const isHinting = hintActiveTiles.find(h => h.r === r && h.c === c);
                                             const isWrong = wrongTile && wrongTile.r === r && wrongTile.c === c;
                                             const isEmpty = cellId === 0 && !isMatching;
+                                            
+                                            const cellData = isMatching ? matchingTile.id : cellId;
 
                                             return (
                                                 <div key={`${r}-${c}`} className="relative w-full h-full" style={{ padding: '1px' }}>
@@ -1165,7 +1166,15 @@
                                                             style={{ WebkitTapHighlightColor: 'transparent' }}
                                                             onClick={() => handleTileClick(r, c)}
                                                         >
-                                                            <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${isMatching ? matchingTile.id : cellId}.png`} alt="pokemon" className="w-full h-full object-contain pointer-events-none" style={{ padding: '1px' }}/>
+                                                            {THEMES[activeTheme].type === 'image' ? (
+                                                                <img src={`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${cellData}.png`} alt="tile" className="w-full h-full object-contain pointer-events-none" style={{ padding: '1px' }}/>
+                                                            ) : (
+                                                                <svg viewBox="0 0 100 100" className="w-full h-full pointer-events-none select-none" style={{ padding: '2px' }}>
+                                                                    <text x="50%" y="50%" dominantBaseline="central" textAnchor="middle" fontSize="72">
+                                                                        {cellData}
+                                                                    </text>
+                                                                </svg>
+                                                            )}
                                                         </button>
                                                     )}
                                                 </div>
@@ -1176,19 +1185,16 @@
                             )}
                         </div>
 
-                        {/* Connection status */}
                         {connectionStatus === 'disconnected' && (
                             <div className="absolute top-0 left-0 right-0 bg-red-400 text-white text-center text-xs font-bold py-1 z-[200]">
                                 ! Koneksi terputus, mencoba sambung ulang...
                             </div>
                         )}
 
-                        {/* Board clear flash */}
                         {showBoardClear && (
                             <div className="absolute inset-0 bg-white board-clear-flash z-[90] pointer-events-none" />
                         )}
 
-                        {/* Timeout flash */}
                         {showTimeoutFlash && (
                             <div className="absolute inset-0 flex flex-col items-center justify-center z-[95] timeout-flash pointer-events-none" style={{ background: 'rgba(239,68,68,0.85)' }}>
                                 <span className="text-white text-3xl font-black drop-shadow-lg">Waktu Habis!</span>
@@ -1216,14 +1222,32 @@
 
                         {gameState === 'LOBBY_MAIN' && (
                             <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
-                                <h1 className="text-4xl font-black text-pink-500 mb-1 drop-shadow-sm text-center">POKÉMON<br/>CONNECT</h1>
+                                <h1 className="text-4xl font-black text-pink-500 mb-1 drop-shadow-sm text-center">TETRIS<br/>CONNECT</h1>
                                 <h2 className="text-lg font-bold text-purple-400 mb-2">Halo, {playerName}!</h2>
-                                {(() => { const best = parseInt(localStorage.getItem('pkmnBestScore') || '0'); return best > 0 ? <p className="text-sm text-pink-300 font-bold mb-6">Best Score: {best}</p> : <div className="mb-6"></div>; })()}
-                                <div className="flex flex-col gap-4 w-3/4 max-w-[250px]">
+                                {(() => { const best = parseInt(localStorage.getItem('pkmnBestScore') || '0'); return best > 0 ? <p className="text-sm text-pink-300 font-bold mb-4">Best Score: {best}</p> : <div className="mb-4"></div>; })()}
+                                
+                                {/* Pilihan Tema */}
+                                <div className="mb-6 w-full max-w-[280px]">
+                                    <p className="text-xs font-bold text-gray-400 mb-2 text-center uppercase tracking-widest">Pilih Tema Board</p>
+                                    <div className="flex justify-center gap-2">
+                                        {Object.entries(THEMES).map(([key, t]) => (
+                                            <button
+                                                key={key}
+                                                onClick={() => { setActiveTheme(key); localStorage.setItem('pkmnTheme', key); }}
+                                                className={`p-2 rounded-xl border-[3px] transition-all flex flex-col items-center justify-center w-16 h-16 ${activeTheme === key ? 'bg-pink-100 border-pink-400 scale-105 shadow-md' : 'bg-white border-pink-100 hover:bg-pink-50'}`}
+                                            >
+                                                <span className="text-2xl leading-none mb-1">{key === 'pokemon' ? '🐣' : t.data[0]}</span>
+                                                <span className="text-[8px] font-bold text-gray-500 uppercase">{t.name}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="flex flex-col gap-3 w-3/4 max-w-[250px]">
                                     <button onClick={() => prepareLevel(1)} className="cute-btn-text py-3 text-lg font-bold">Main Sendiri</button>
                                     <button onClick={() => startMatchmaking('COOP')} className="cute-btn-text py-3 text-lg font-bold bg-gradient-to-r from-teal-400 to-emerald-400">Mode Co-op</button>
                                     <button onClick={() => startMatchmaking('VERSUS')} className="cute-btn-text py-3 text-lg font-bold bg-gradient-to-r from-red-400 to-pink-500">Mode Versus</button>
-                                    <button onClick={() => { localStorage.removeItem('pkmnPlayerName'); setPlayerName(''); setGameState('LOGIN'); }} className="text-gray-400 font-bold underline mt-4">Ganti Nama</button>
+                                    <button onClick={() => { localStorage.removeItem('pkmnPlayerName'); setPlayerName(''); setGameState('LOGIN'); }} className="text-gray-400 font-bold underline mt-3">Ganti Nama</button>
                                 </div>
                             </div>
                         )}
@@ -1245,7 +1269,7 @@
                                         <div className="w-5 h-5 bg-white border-4 border-pink-500 rounded-full z-10"></div>
                                     </div>
                                 </div>
-                                <h2 className="text-2xl font-black text-pink-500 mb-6">Memuat Pokémon...</h2>
+                                <h2 className="text-2xl font-black text-pink-500 mb-6">{loadingText}</h2>
                                 <div className="w-3/4 max-w-[250px] bg-pink-100 rounded-full h-5 p-1 shadow-inner border border-pink-200">
                                     <div className="h-full rounded-full bg-gradient-to-r from-pink-400 to-purple-400 transition-all duration-300" style={{ width: `${progress}%` }}></div>
                                 </div>
@@ -1257,7 +1281,7 @@
                             <div className="absolute inset-0 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center z-[100]">
                                 <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-teal-400 mb-6"></div>
                                 <h2 className="text-2xl font-black text-teal-500 mb-2">Menunggu Pemain Lain...</h2>
-                                <p className="text-gray-500 font-bold text-center px-6">Pokémon sudah siap! Menunggu partner selesai loading...</p>
+                                <p className="text-gray-500 font-bold text-center px-6">Board sudah siap! Menunggu partner selesai loading...</p>
                             </div>
                         )}
 
@@ -1303,15 +1327,21 @@
                                                         {iWin ? 'MENANG!' : isDraw ? 'SERI!' : 'KALAH!'}
                                                     </div>
                                                     <p className="text-sm text-gray-400 font-bold mb-4">Waktu Habis!</p>
-                                                    <div className="w-full max-w-[260px] bg-white border-2 border-pink-200 rounded-2xl p-4 mb-4 space-y-2">
+                                                    <div className="w-full max-w-[280px] bg-white border-2 border-pink-200 rounded-2xl p-4 mb-4 space-y-2">
                                                         <div className="flex justify-between items-center">
-                                                            <span className="font-bold text-gray-600">{playerName} (Kamu)</span>
-                                                            <span className={`text-2xl font-black ${iWin ? 'text-green-400' : 'text-pink-400'}`}>{score}</span>
+                                                            <div className="flex flex-col">
+                                                                <span className="font-bold text-gray-600">{playerName} (Kamu)</span>
+                                                                <span className="text-xs text-purple-400 font-bold">Progress: {myProgressPercent}%</span>
+                                                            </div>
+                                                            <span className={`text-3xl font-black ${iWin ? 'text-green-400' : 'text-pink-400'}`}>{score}</span>
                                                         </div>
-                                                        <div className="border-t border-pink-100"></div>
+                                                        <div className="border-t border-pink-100 my-2"></div>
                                                         <div className="flex justify-between items-center">
-                                                            <span className="font-bold text-gray-600">{opponentName}</span>
-                                                            <span className={`text-2xl font-black ${!iWin && !isDraw ? 'text-green-400' : 'text-red-400'}`}>{opponentScore}</span>
+                                                            <div className="flex flex-col">
+                                                                <span className="font-bold text-gray-600">{opponentName}</span>
+                                                                <span className="text-xs text-orange-400 font-bold">Progress: {opponentProgress}%</span>
+                                                            </div>
+                                                            <span className={`text-3xl font-black ${!iWin && !isDraw ? 'text-green-400' : 'text-red-400'}`}>{opponentScore}</span>
                                                         </div>
                                                     </div>
                                                     <button onClick={handleRematch} className="cute-btn-text bg-gradient-to-r from-purple-400 to-pink-500 px-8 py-3 text-lg font-bold mb-3">
@@ -1323,10 +1353,10 @@
                                         })() : (
                                             <>
                                                 <h2 className="text-3xl font-black text-red-400 mb-2">WAKTU HABIS!</h2>
-                                                {/* Single player stats */}
                                                 <div className="w-full max-w-[280px] bg-white border-2 border-pink-200 rounded-2xl p-4 mb-4 space-y-2">
                                                     {[
                                                         { label: 'Skor Akhir', val: score, big: true },
+                                                        { label: 'Progress Board', val: `${myProgressPercent}%` },
                                                         { label: 'Level Tertinggi', val: level },
                                                         { label: 'Hint Dipakai', val: 3 - hints },
                                                         { label: 'Shuffle Dipakai', val: 3 - shuffles },
@@ -1378,3 +1408,4 @@
     </script>
 </body>
 </html>
+
